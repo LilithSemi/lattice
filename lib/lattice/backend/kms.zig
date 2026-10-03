@@ -48,7 +48,7 @@ pub const Kms = struct {
         defer if (owned_path) |p| gpa.free(p);
         const path = owned_path orelse device_path;
 
-        const sess = try session.Session.open(gpa, opts.vt_switch);
+        const sess = try session.Session.open(gpa, io, opts.vt_switch);
         errdefer sess.deinit();
         const drm_fd = try sess.openDevice(path);
         var dev = try device.Device.openWithFd(gpa, drm_fd);

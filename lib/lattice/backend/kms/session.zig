@@ -8,11 +8,11 @@ pub const Session = struct {
     vt_switch: bool,
     devices: std.ArrayListUnmanaged(libseat.Device) = .empty,
 
-    pub fn open(gpa: std.mem.Allocator, vt_switch: bool) !*Session {
+    pub fn open(gpa: std.mem.Allocator, io: std.Io, vt_switch: bool) !*Session {
         const self = try gpa.create(Session);
         errdefer gpa.destroy(self);
         self.* = .{ .gpa = gpa, .seat = undefined, .vt_switch = vt_switch };
-        self.seat = libseat.Seat.open(gpa, &seat_listener, self) catch |e| return switch (e) {
+        self.seat = libseat.Seat.open(gpa, io, &seat_listener, self) catch |e| return switch (e) {
             error.NoBackend, error.ConnectionFailed => error.NoSession,
             error.Denied, error.SeatInUse => error.DeviceAccessDenied,
             else => e,
