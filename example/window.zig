@@ -1,5 +1,4 @@
 const std = @import("std");
-const linux = std.os.linux;
 const lattice = @import("lattice");
 
 // Quit after this many frames OR after the deadline, whichever comes first.
@@ -8,14 +7,13 @@ const lattice = @import("lattice");
 const MAX_FRAMES: u32 = 60;
 const DEADLINE_NS: u64 = 5 * std.time.ns_per_s;
 
-fn nowNs() u64 {
-    var ts: linux.timespec = undefined;
-    _ = linux.clock_gettime(.MONOTONIC, &ts);
-    return @intCast(ts.sec * std.time.ns_per_s + ts.nsec);
+fn nowNs(io: std.Io) u64 {
+    return @intCast(std.Io.Clock.now(.awake, io).nanoseconds);
 }
 
 const App = struct {
     ctx: *lattice.Context,
+    io: std.Io,
     sid: lattice.SurfaceId,
     frame_count: u32,
     done: bool,
@@ -33,7 +31,7 @@ const App = struct {
                     self.done = true;
                     return;
                 };
-                if (self.frame_count >= MAX_FRAMES or nowNs() - self.start_ns >= DEADLINE_NS) {
+                if (self.frame_count >= MAX_FRAMES or nowNs(self.io) - self.start_ns >= DEADLINE_NS) {
                     self.ctx.quit();
                     self.done = true;
                 }
@@ -118,10 +116,11 @@ pub fn main(init: std.process.Init) !void {
 
     var app = App{
         .ctx = &ctx,
+        .io = init.io,
         .sid = surface.id,
         .frame_count = 0,
         .done = false,
-        .start_ns = nowNs(),
+        .start_ns = nowNs(init.io),
         // Derived from the chosen surface format (the same field the backend keys
         // on) so app.hdr can never drift from the color config above.
         .hdr = color_cfg.format.isHdr(),
@@ -135,7 +134,7 @@ pub fn main(init: std.process.Init) !void {
     ctx.running = true;
     while (ctx.running) {
         try ctx.poll(500, App.handler, &app);
-        if (nowNs() - app.start_ns >= DEADLINE_NS and !app.done) {
+        if (nowNs(init.io) - app.start_ns >= DEADLINE_NS and !app.done) {
             ctx.quit();
             app.done = true;
         }

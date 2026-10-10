@@ -877,9 +877,8 @@ pub const Compositor = struct {
     ///
     /// This paces the hosted client to the shell's present cadence.
     pub fn endFrame(self: *Compositor) void {
-        var ts: std.os.linux.timespec = undefined;
-        _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
-        const time_ms: u32 = @truncate(@as(u64, @intCast(ts.sec)) * 1000 + @as(u64, @intCast(ts.nsec)) / 1_000_000);
+        const now = std.Io.Clock.now(.awake, self.io);
+        const time_ms: u32 = @truncate(@as(u64, @intCast(now.toMilliseconds())));
         for (self.surface_entries.items) |*entry| {
             // FIX C3: release only the buffer that was committed on this frame.
             // pending_buffer_res is the attach-staging pointer and must not be touched here.
