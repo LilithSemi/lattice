@@ -154,7 +154,7 @@ pub const ShmBuffer = struct {
             gpa,
             width,
             height,
-            @intFromEnum(wlp.WlShm.Format.xrgb8888), // 1
+            @backingInt(wlp.WlShm.Format.xrgb8888), // 1
             strideFor(width),
         );
     }

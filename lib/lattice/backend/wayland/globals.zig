@@ -59,7 +59,7 @@ pub fn roundtripGlobals(
         const ev = (try client.dispatchEvent(conn, imap, &msg_buf, &args)) orelse continue;
 
         if (ev.interface == &wlp.WlCallback.interface and ev.object_id == cb_id) {
-            if (ev.opcode == @intFromEnum(wlp.WlCallback.EventOpcode.done)) {
+            if (ev.opcode == @backingInt(wlp.WlCallback.EventOpcode.done)) {
                 imap.remove(cb_id);
                 done = true;
             }
@@ -67,14 +67,14 @@ pub fn roundtripGlobals(
         }
 
         if (ev.interface == &wlp.WlDisplay.interface) {
-            if (ev.opcode == @intFromEnum(wlp.WlDisplay.EventOpcode.@"error")) {
+            if (ev.opcode == @backingInt(wlp.WlDisplay.EventOpcode.@"error")) {
                 return error.ServerError;
             }
             continue;
         }
 
         if (ev.interface == &wlp.WlRegistry.interface) {
-            if (ev.opcode == @intFromEnum(wlp.WlRegistry.EventOpcode.global)) {
+            if (ev.opcode == @backingInt(wlp.WlRegistry.EventOpcode.global)) {
                 const gname = ev.args[0].uint;
                 const ifc = ev.args[1].string orelse continue;
                 const ver = ev.args[2].uint;

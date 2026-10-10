@@ -1,12 +1,12 @@
 .{
     .name = .lattice,
     .version = "0.1.0",
-    .minimum_zig_version = "0.16.0",
+    .minimum_zig_version = "0.17.0",
     .fingerprint = 0xced309c81c71db4d,
     .dependencies = .{
         .wayland = .{
-            .url = "git+https://git.lilithsemi.com/LilithSemi/wayland.zig#3956a7bc033fba3e79a9a779f281358d478b856a",
-            .hash = "wayland-0.1.0-J5KKz6aUBgDsn2EeORaIla9lwyZfKO4hS81W2mhJRDEN",
+            .url = "git+https://git.lilithsemi.com/LilithSemi/wayland.zig#372fc60aaf2c4e8b833a307c8993a61687a7b870",
+            .hash = "wayland-0.1.0-J5KKzzOhBgD0IcX3ZyRDIqNS5wedY6WKyXP0tyDtIM4L",
         },
         .wayland_protocols = .{
             .url = "https://gitlab.com/freedesktop-sdk/mirrors/freedesktop/wayland/wayland-protocols/-/archive/1.49/wayland-protocols-1.49.tar.gz",
@@ -17,28 +17,28 @@
             .hash = "N-V-__8AAA46JQABKU7sa-6xGUAN44uFsYSUS_w79UVuu7qo",
         },
         .drm = .{
-            .url = "git+https://git.lilithsemi.com/LilithSemi/drm.zig#25adace9df06b8b859ee52cc0832bcc4c2223c3a",
-            .hash = "drm-0.1.0-ObSCTywHAQAeCZ7R4ZAVRLD63FEkmWIQfOhnfwQwoiBF",
+            .url = "git+https://git.lilithsemi.com/LilithSemi/drm.zig#2052f9db78f1ceddc7fd378aaf464467adcd3ee8",
+            .hash = "drm-0.1.0-ObSCT5MIAQDFo1jPV8V9pDsBZtveE6ZB1OOxy7ehbr_J",
         },
         .xkbcommon = .{
-            .url = "git+https://git.lilithsemi.com/LilithSemi/xkbcommon.zig#d11d8dd0867917180296aeebbcd2e0c0ed928863",
-            .hash = "xkbcommon-0.1.0-6Tc_PVVqCACIec--fvhX1jyDbG7fko597bOOBodHiOvy",
+            .url = "git+https://git.lilithsemi.com/LilithSemi/xkbcommon.zig#148af8d0f65ceb44376f0f674a46aec7aa966aa8",
+            .hash = "xkbcommon-0.1.0-6Tc_PQptCABqiTjz-CH7Qr2ObkrLwYZxOgGVUN3xzULy",
         },
         .udev = .{
-            .url = "git+https://git.lilithsemi.com/LilithSemi/udev.zig#67e0061ab53028c93134c9fe8e44a5a89a17137f",
-            .hash = "udev-0.1.0-ZWb7H_1aBwCNMTs30b9SL6tTkvpmDLzz_RfKP1UPC1FZ",
+            .url = "git+https://git.lilithsemi.com/LilithSemi/udev.zig#5b76bbccde9ef7bcb9b6447c0f2454f2ade51733",
+            .hash = "udev-0.1.0-ZWb7H_NaBwBz8odIGbKN2hpRa-3HdrIsuNaml7VzsRTs",
         },
         .libinput = .{
-            .url = "git+https://git.lilithsemi.com/LilithSemi/libinput.zig#95179ebce87291f8e4e2296c204ca20278dde57d",
-            .hash = "libinput-0.1.0-SVU4XDusAQDVLM2OfQ4hpSEuStYEVaGc7DE8buLdIe74",
+            .url = "git+https://git.lilithsemi.com/LilithSemi/libinput.zig#45678e71738054779877d25dfed768985be5bdd4",
+            .hash = "libinput-0.1.0-SVU4XJarAQAACEQfXlQHcvDSS98CAUwz4SLOcV70vU77",
         },
         .libseat = .{
-            .url = "git+https://git.lilithsemi.com/LilithSemi/libseat.zig#2d4dcce018847cf3a9785be004f6022e728704c7",
-            .hash = "libseat-0.1.0-q6LEc_zEAQC5pODa9K8BeThxlH3wFQR1L_-O0kbI0hFf",
+            .url = "git+https://git.lilithsemi.com/LilithSemi/libseat.zig#8b3b2a66bdf3b8de1e4683fdd02de63fb47c6834",
+            .hash = "libseat-0.1.0-q6LEcxXFAQAY0tj0O6xwKJa1gxV8m52yF3z_qbjN2Az5",
         },
         .prism = .{
-            .url = "git+https://git.lilithsemi.com/LilithSemi/prism.git#c5229d2e6970f4afa0bdead6e374b78fdcceca4a",
-            .hash = "prism-0.1.0-PSE12Dy9OADInz978yIM9fTC8EkWv_p_sa-aHf1ei_ny",
+            .url = "git+https://git.lilithsemi.com/LilithSemi/prism.git#4c448de0bb18153d2f1629344f2448b7f1f7f79b",
+            .hash = "prism-0.1.0-PSE12AXEOAAYDw_bTCWN79Ld-mKZW0ezu7reHBXzgqBh",
         },
     },
     .paths = .{ "build.zig", "build.zig.zon", "lib" },

@@ -145,10 +145,10 @@ pub fn uploadToTexture(
 pub const HostedSurfaceId = enum(u32) {
     _,
     pub fn from(v: u32) HostedSurfaceId {
-        return @enumFromInt(v);
+        return @fromBackingInt(@intCast(v));
     }
     pub fn value(self: HostedSurfaceId) u32 {
-        return @intFromEnum(self);
+        return @backingInt(self);
     }
 };
 
@@ -156,10 +156,10 @@ pub const HostedSurfaceId = enum(u32) {
 pub const ClientId = enum(u32) {
     _,
     pub fn from(v: u32) ClientId {
-        return @enumFromInt(v);
+        return @fromBackingInt(@intCast(v));
     }
     pub fn value(self: ClientId) u32 {
-        return @intFromEnum(self);
+        return @backingInt(self);
     }
 };
 
@@ -320,7 +320,7 @@ test "copyShmToRgba8: XRGB8888 2x1 -> rgba8" {
     // pixel0: B=30, G=20, R=10, X=0xFF -> rgba8 R=10,G=20,B=30,A=0xFF
     // pixel1: B=3,  G=2,  R=1,  X=0xFF -> rgba8 R=1, G=2, B=3, A=0xFF
     const src = [_]u8{ 30, 20, 10, 0xFF, 3, 2, 1, 0xFF };
-    var dst = [_]u8{0} ** 8;
+    var dst: [8]u8 = @splat(0);
     copyShmToRgba8(&dst, &src, 2, 1, 8, 1); // format 1 = XRGB8888
     try std.testing.expectEqualSlices(u8, &[_]u8{ 10, 20, 30, 0xFF, 1, 2, 3, 0xFF }, &dst);
 }
@@ -329,7 +329,7 @@ test "copyShmToRgba8: ARGB8888 preserves alpha" {
     // wl_shm ARGB8888 LE: bytes B,G,R,A
     // pixel0: B=50, G=40, R=30, A=200 -> rgba8 R=30,G=40,B=50,A=200
     const src = [_]u8{ 50, 40, 30, 200 };
-    var dst = [_]u8{0} ** 4;
+    var dst: [4]u8 = @splat(0);
     copyShmToRgba8(&dst, &src, 1, 1, 4, 0); // format 0 = ARGB8888
     try std.testing.expectEqualSlices(u8, &[_]u8{ 30, 40, 50, 200 }, &dst);
 }
@@ -342,7 +342,7 @@ test "copyShmToRgba8: strided source (src_stride > width*4)" {
         100, 150, 200, 255, 0, 0, 0, 0, // row 0 + padding
         10, 20, 30, 128, 0, 0, 0, 0, // row 1 + padding
     };
-    var dst = [_]u8{0} ** 8; // tight dst: 1x2, stride=4
+    var dst: [8]u8 = @splat(0); // tight dst: 1x2, stride=4
     copyShmToRgba8(&dst, &src, 1, 2, 8, 0); // format 0 = ARGB8888
     // row0: R=200, G=150, B=100, A=255
     try std.testing.expectEqual(@as(u8, 200), dst[0]);
@@ -371,7 +371,7 @@ test "copyRows: rgba16_float 2x2 fp16 byte-exact with differing strides" {
     const dst_stride: u32 = 16; // tight
 
     // Build src: 2 rows of 16 data bytes + 4 pad bytes each.
-    var src = [_]u8{0} ** (src_stride * h);
+    var src: [src_stride * h]u8 = @splat(0);
     // Row 0, texel 0: R=4.0 (0x00,0x44), G,B,A distinct.
     src[0] = 0x00; // R low
     src[1] = 0x44; // R high (fp16 4.0)
@@ -390,7 +390,7 @@ test "copyRows: rgba16_float 2x2 fp16 byte-exact with differing strides" {
     while (i < src_stride + 16) : (i += 1) src[i] = @intCast(0xA0 + (i - src_stride));
     // Row 1 padding src[36..40] left 0.
 
-    var dst = [_]u8{0xEE} ** (dst_stride * h);
+    var dst: [dst_stride * h]u8 = @splat(0xEE);
     copyRows(&dst, &src, w, h, dst_stride, src_stride, bpp);
 
     // Each destination row's first w*bpp bytes must equal the source row's

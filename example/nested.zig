@@ -253,12 +253,13 @@ const App = struct {
                 alive.* = false;
                 continue;
             };
-            var status: u32 = 0;
+            var status: i32 = 0;
             const rc = linux.waitpid(pid, &status, linux.W.NOHANG);
             const errno = linux.errno(rc);
             if (errno == .SUCCESS and rc == @as(usize, @intCast(pid))) {
-                const exit_code: u8 = if (linux.W.IFEXITED(status))
-                    linux.W.EXITSTATUS(status)
+                const ustatus: u32 = @bitCast(status);
+                const exit_code: u8 = if (linux.W.IFEXITED(ustatus))
+                    linux.W.EXITSTATUS(ustatus)
                 else
                     255;
                 std.debug.print("[nested] child {d} exited with code {d}\n", .{ idx, exit_code });

@@ -118,10 +118,11 @@ pub const LogicalEvent = union(enum) {
 };
 
 /// Safe opcode -> enum helper. Returns null when opcode is not a valid enum value.
-/// Zig 0.16 has no std.meta.intToEnum; we implement it by scanning tag values.
+/// Zig has no std.meta.intToEnum; we implement it by scanning tag values.
 fn toOpcode(comptime E: type, raw: u16) ?E {
-    inline for (@typeInfo(E).@"enum".fields) |f| {
-        if (f.value == raw) return @field(E, f.name);
+    const info = @typeInfo(E).@"enum";
+    inline for (info.field_names, info.field_values) |n, v| {
+        if (v == raw) return @field(E, n);
     }
     return null;
 }
@@ -918,7 +919,7 @@ pub fn pumpOnce(
 
 test "classify xdg_surface.configure returns serial" {
     const args = [_]wl.Argument{.{ .uint = 42 }};
-    const result = classify(&xdg.XdgSurface.interface, @intFromEnum(xdg.XdgSurface.EventOpcode.configure), &args);
+    const result = classify(&xdg.XdgSurface.interface, @backingInt(xdg.XdgSurface.EventOpcode.configure), &args);
     try std.testing.expect(result == .xdg_surface_configure);
     try std.testing.expectEqual(@as(u32, 42), result.xdg_surface_configure.serial);
 }
@@ -929,25 +930,25 @@ test "classify xdg_toplevel.configure width/height" {
         .{ .int = 720 },
         .{ .array = null },
     };
-    const result = classify(&xdg.XdgToplevel.interface, @intFromEnum(xdg.XdgToplevel.EventOpcode.configure), &args);
+    const result = classify(&xdg.XdgToplevel.interface, @backingInt(xdg.XdgToplevel.EventOpcode.configure), &args);
     try std.testing.expect(result == .xdg_toplevel_configure);
     try std.testing.expectEqual(@as(i32, 1280), result.xdg_toplevel_configure.width);
     try std.testing.expectEqual(@as(i32, 720), result.xdg_toplevel_configure.height);
 }
 
 test "classify xdg_toplevel.close" {
-    const result = classify(&xdg.XdgToplevel.interface, @intFromEnum(xdg.XdgToplevel.EventOpcode.close), &.{});
+    const result = classify(&xdg.XdgToplevel.interface, @backingInt(xdg.XdgToplevel.EventOpcode.close), &.{});
     try std.testing.expect(result == .xdg_toplevel_close);
 }
 
 test "classify wl_callback.done -> frame_done" {
     const args = [_]wl.Argument{.{ .uint = 0 }};
-    const result = classify(&wlp.WlCallback.interface, @intFromEnum(wlp.WlCallback.EventOpcode.done), &args);
+    const result = classify(&wlp.WlCallback.interface, @backingInt(wlp.WlCallback.EventOpcode.done), &args);
     try std.testing.expect(result == .frame_done);
 }
 
 test "classify wl_buffer.release -> wl_buffer_release" {
-    const result = classify(&wlp.WlBuffer.interface, @intFromEnum(wlp.WlBuffer.EventOpcode.release), &.{});
+    const result = classify(&wlp.WlBuffer.interface, @backingInt(wlp.WlBuffer.EventOpcode.release), &.{});
     try std.testing.expect(result == .wl_buffer_release);
 }
 
@@ -958,7 +959,7 @@ test "classify wl_output.mode" {
         .{ .int = 1080 },
         .{ .int = 60000 },
     };
-    const result = classify(&wlp.WlOutput.interface, @intFromEnum(wlp.WlOutput.EventOpcode.mode), &args);
+    const result = classify(&wlp.WlOutput.interface, @backingInt(wlp.WlOutput.EventOpcode.mode), &args);
     try std.testing.expect(result == .wl_output_mode);
     try std.testing.expectEqual(@as(u32, 0x1), result.wl_output_mode.flags);
     try std.testing.expectEqual(@as(i32, 1920), result.wl_output_mode.width);
@@ -967,14 +968,14 @@ test "classify wl_output.mode" {
 
 test "classify xdg_wm_base.ping" {
     const args = [_]wl.Argument{.{ .uint = 99 }};
-    const result = classify(&xdg.XdgWmBase.interface, @intFromEnum(xdg.XdgWmBase.EventOpcode.ping), &args);
+    const result = classify(&xdg.XdgWmBase.interface, @backingInt(xdg.XdgWmBase.EventOpcode.ping), &args);
     try std.testing.expect(result == .xdg_ping);
     try std.testing.expectEqual(@as(u32, 99), result.xdg_ping.serial);
 }
 
 test "classify wl_keyboard.keymap carries the format, the fd and the size" {
     const args = [_]wl.Argument{ .{ .uint = 1 }, .{ .fd = 7 }, .{ .uint = 4096 } };
-    const result = classify(&wlp.WlKeyboard.interface, @intFromEnum(wlp.WlKeyboard.EventOpcode.keymap), &args);
+    const result = classify(&wlp.WlKeyboard.interface, @backingInt(wlp.WlKeyboard.EventOpcode.keymap), &args);
     try std.testing.expect(result == .wl_keyboard_keymap);
     try std.testing.expectEqual(@as(u32, 1), result.wl_keyboard_keymap.format);
     try std.testing.expectEqual(@as(i32, 7), result.wl_keyboard_keymap.fd);
@@ -983,12 +984,12 @@ test "classify wl_keyboard.keymap carries the format, the fd and the size" {
 
 test "classify wl_keyboard.enter and leave carry the surface object" {
     const enter_args = [_]wl.Argument{ .{ .uint = 1 }, .{ .object = 42 }, .{ .array = null } };
-    const enter = classify(&wlp.WlKeyboard.interface, @intFromEnum(wlp.WlKeyboard.EventOpcode.enter), &enter_args);
+    const enter = classify(&wlp.WlKeyboard.interface, @backingInt(wlp.WlKeyboard.EventOpcode.enter), &enter_args);
     try std.testing.expect(enter == .wl_keyboard_enter);
     try std.testing.expectEqual(@as(u32, 42), enter.wl_keyboard_enter.surface_obj);
 
     const leave_args = [_]wl.Argument{ .{ .uint = 2 }, .{ .object = 42 } };
-    const leave = classify(&wlp.WlKeyboard.interface, @intFromEnum(wlp.WlKeyboard.EventOpcode.leave), &leave_args);
+    const leave = classify(&wlp.WlKeyboard.interface, @backingInt(wlp.WlKeyboard.EventOpcode.leave), &leave_args);
     try std.testing.expect(leave == .wl_keyboard_leave);
     try std.testing.expectEqual(@as(u32, 42), leave.wl_keyboard_leave.surface_obj);
 }
@@ -1001,7 +1002,7 @@ test "classify wl_keyboard.modifiers carries the four masks" {
         .{ .uint = 4 }, // locked
         .{ .uint = 0 }, // group
     };
-    const result = classify(&wlp.WlKeyboard.interface, @intFromEnum(wlp.WlKeyboard.EventOpcode.modifiers), &args);
+    const result = classify(&wlp.WlKeyboard.interface, @backingInt(wlp.WlKeyboard.EventOpcode.modifiers), &args);
     try std.testing.expect(result == .wl_keyboard_modifiers);
     try std.testing.expectEqual(@as(u32, 1), result.wl_keyboard_modifiers.depressed);
     try std.testing.expectEqual(@as(u32, 2), result.wl_keyboard_modifiers.latched);
@@ -1013,7 +1014,7 @@ test "classify wl_keyboard.repeat_info is ignored for now" {
     // Key repeat is client-side timing, and the neutral event has no repeat
     // action until a consumer needs one.
     const args = [_]wl.Argument{ .{ .int = 25 }, .{ .int = 600 } };
-    const result = classify(&wlp.WlKeyboard.interface, @intFromEnum(wlp.WlKeyboard.EventOpcode.repeat_info), &args);
+    const result = classify(&wlp.WlKeyboard.interface, @backingInt(wlp.WlKeyboard.EventOpcode.repeat_info), &args);
     try std.testing.expect(result == .other);
 }
 
@@ -1027,13 +1028,13 @@ test "classify unknown opcode returns other" {
 test "classify wl_output.name" {
     const name_str: []const u8 = "HDMI-1";
     const args = [_]wl.Argument{.{ .string = name_str }};
-    const result = classify(&wlp.WlOutput.interface, @intFromEnum(wlp.WlOutput.EventOpcode.name), &args);
+    const result = classify(&wlp.WlOutput.interface, @backingInt(wlp.WlOutput.EventOpcode.name), &args);
     try std.testing.expect(result == .wl_output_name);
     try std.testing.expectEqualStrings("HDMI-1", result.wl_output_name.name);
 }
 
 test "classify wl_output.done" {
-    const result = classify(&wlp.WlOutput.interface, @intFromEnum(wlp.WlOutput.EventOpcode.done), &.{});
+    const result = classify(&wlp.WlOutput.interface, @backingInt(wlp.WlOutput.EventOpcode.done), &.{});
     try std.testing.expect(result == .wl_output_done);
 }
 
@@ -1043,7 +1044,7 @@ test "classify zwp_relative_pointer.relative_motion decodes deltas" {
         .{ .fixed = wl.Fixed.fromDouble(5.0) }, .{ .fixed = wl.Fixed.fromDouble(-3.0) },
         .{ .fixed = wl.Fixed.fromDouble(6.0) }, .{ .fixed = wl.Fixed.fromDouble(-4.0) },
     };
-    const r = classify(&rp.ZwpRelativePointerV1.interface, @intFromEnum(rp.ZwpRelativePointerV1.EventOpcode.relative_motion), &args);
+    const r = classify(&rp.ZwpRelativePointerV1.interface, @backingInt(rp.ZwpRelativePointerV1.EventOpcode.relative_motion), &args);
     try std.testing.expect(r == .wl_relative_motion);
     try std.testing.expectApproxEqAbs(@as(f64, 5.0), r.wl_relative_motion.dx, 0.01);
     try std.testing.expectApproxEqAbs(@as(f64, -4.0), r.wl_relative_motion.dy_unaccel, 0.01);
@@ -1051,14 +1052,14 @@ test "classify zwp_relative_pointer.relative_motion decodes deltas" {
 
 test "classify tablet_seat.tablet_added decodes new_id" {
     const args = [_]wl.Argument{.{ .new_id = 42 }};
-    const r = classify(&tv2.ZwpTabletSeatV2.interface, @intFromEnum(tv2.ZwpTabletSeatV2.EventOpcode.tablet_added), &args);
+    const r = classify(&tv2.ZwpTabletSeatV2.interface, @backingInt(tv2.ZwpTabletSeatV2.EventOpcode.tablet_added), &args);
     try std.testing.expect(r == .tablet_seat_tablet_added);
     try std.testing.expectEqual(@as(u32, 42), r.tablet_seat_tablet_added.new_id);
 }
 
 test "classify tablet_seat.tool_added decodes new_id" {
     const args = [_]wl.Argument{.{ .new_id = 99 }};
-    const r = classify(&tv2.ZwpTabletSeatV2.interface, @intFromEnum(tv2.ZwpTabletSeatV2.EventOpcode.tool_added), &args);
+    const r = classify(&tv2.ZwpTabletSeatV2.interface, @backingInt(tv2.ZwpTabletSeatV2.EventOpcode.tool_added), &args);
     try std.testing.expect(r == .tablet_seat_tool_added);
     try std.testing.expectEqual(@as(u32, 99), r.tablet_seat_tool_added.new_id);
 }
@@ -1068,7 +1069,7 @@ test "classify tablet_tool.motion decodes surface-local coords" {
         .{ .fixed = wl.Fixed.fromDouble(150.5) },
         .{ .fixed = wl.Fixed.fromDouble(75.25) },
     };
-    const r = classify(&tv2.ZwpTabletToolV2.interface, @intFromEnum(tv2.ZwpTabletToolV2.EventOpcode.motion), &args);
+    const r = classify(&tv2.ZwpTabletToolV2.interface, @backingInt(tv2.ZwpTabletToolV2.EventOpcode.motion), &args);
     try std.testing.expect(r == .tablet_tool_motion);
     try std.testing.expectApproxEqAbs(@as(f64, 150.5), r.tablet_tool_motion.x, 0.01);
     try std.testing.expectApproxEqAbs(@as(f64, 75.25), r.tablet_tool_motion.y, 0.01);
@@ -1076,32 +1077,32 @@ test "classify tablet_tool.motion decodes surface-local coords" {
 
 test "classify tablet_tool.pressure decodes raw uint" {
     const args = [_]wl.Argument{.{ .uint = 32768 }};
-    const r = classify(&tv2.ZwpTabletToolV2.interface, @intFromEnum(tv2.ZwpTabletToolV2.EventOpcode.pressure), &args);
+    const r = classify(&tv2.ZwpTabletToolV2.interface, @backingInt(tv2.ZwpTabletToolV2.EventOpcode.pressure), &args);
     try std.testing.expect(r == .tablet_tool_pressure);
     try std.testing.expectEqual(@as(u32, 32768), r.tablet_tool_pressure.pressure);
 }
 
 test "classify tablet_tool.frame returns tablet_tool_frame" {
     const args = [_]wl.Argument{.{ .uint = 1000 }};
-    const r = classify(&tv2.ZwpTabletToolV2.interface, @intFromEnum(tv2.ZwpTabletToolV2.EventOpcode.frame), &args);
+    const r = classify(&tv2.ZwpTabletToolV2.interface, @backingInt(tv2.ZwpTabletToolV2.EventOpcode.frame), &args);
     try std.testing.expect(r == .tablet_tool_frame);
 }
 
 test "classify tablet_tool.proximity_in and proximity_out" {
     // proximity_in: args = [serial(u), tablet(o), surface(o)]
     const args_in = [_]wl.Argument{ .{ .uint = 1 }, .{ .object = 5 }, .{ .object = 6 } };
-    const r_in = classify(&tv2.ZwpTabletToolV2.interface, @intFromEnum(tv2.ZwpTabletToolV2.EventOpcode.proximity_in), &args_in);
+    const r_in = classify(&tv2.ZwpTabletToolV2.interface, @backingInt(tv2.ZwpTabletToolV2.EventOpcode.proximity_in), &args_in);
     try std.testing.expect(r_in == .tablet_tool_proximity_in);
 
-    const r_out = classify(&tv2.ZwpTabletToolV2.interface, @intFromEnum(tv2.ZwpTabletToolV2.EventOpcode.proximity_out), &.{});
+    const r_out = classify(&tv2.ZwpTabletToolV2.interface, @backingInt(tv2.ZwpTabletToolV2.EventOpcode.proximity_out), &.{});
     try std.testing.expect(r_out == .tablet_tool_proximity_out);
 }
 
 test "classify tablet_tool.down and up" {
     const args_down = [_]wl.Argument{.{ .uint = 7 }};
-    const r_down = classify(&tv2.ZwpTabletToolV2.interface, @intFromEnum(tv2.ZwpTabletToolV2.EventOpcode.down), &args_down);
+    const r_down = classify(&tv2.ZwpTabletToolV2.interface, @backingInt(tv2.ZwpTabletToolV2.EventOpcode.down), &args_down);
     try std.testing.expect(r_down == .tablet_tool_down);
 
-    const r_up = classify(&tv2.ZwpTabletToolV2.interface, @intFromEnum(tv2.ZwpTabletToolV2.EventOpcode.up), &.{});
+    const r_up = classify(&tv2.ZwpTabletToolV2.interface, @backingInt(tv2.ZwpTabletToolV2.EventOpcode.up), &.{});
     try std.testing.expect(r_up == .tablet_tool_up);
 }

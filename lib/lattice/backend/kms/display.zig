@@ -316,7 +316,7 @@ test "crtcFromPossible picks the crtc id at the first set bit index" {
 }
 
 test "propNameEq compares a null-padded [32]u8 name to a string" {
-    var buf: [32]u8 = [_]u8{0} ** 32;
+    var buf: [32]u8 = @splat(0);
     @memcpy(buf[0..7], "CRTC_ID");
     try std.testing.expect(propNameEq(buf, "CRTC_ID"));
     try std.testing.expect(!propNameEq(buf, "FB_ID"));

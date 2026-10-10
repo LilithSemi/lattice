@@ -58,7 +58,7 @@ pub const Context = struct {
                     // If we AUTO-selected kms but can't acquire the device (no seat, denied,
                     // or no card), fall back to headless instead of failing the whole app.
                     error.NoSession, error.DeviceAccessDenied, error.NoDrmDevice => if (opts.backend == .auto) {
-                        const h = try @import("backend/headless.zig").Headless.init(gpa);
+                        const h = try @import("backend/headless.zig").Headless.init(gpa, io);
                         return initWithBackend(h.backend());
                     } else return err, // explicit .kms surfaces the error
                     else => return err,
@@ -67,7 +67,7 @@ pub const Context = struct {
             },
             .headless => {
                 const headless_backend = @import("backend/headless.zig");
-                const h = try headless_backend.Headless.init(gpa);
+                const h = try headless_backend.Headless.init(gpa, io);
                 return initWithBackend(h.backend());
             },
             .auto => unreachable,
@@ -174,7 +174,7 @@ const headless_mod = @import("backend/headless.zig");
 const color = @import("color.zig");
 
 test "an application reads the seat state and then receives the change through its handler" {
-    const h = try headless_mod.Headless.init(std.testing.allocator);
+    const h = try headless_mod.Headless.init(std.testing.allocator, std.testing.io);
     var ctx = Context.initWithBackend(h.backend());
     defer ctx.deinit();
 
@@ -213,7 +213,7 @@ test "an application reads the seat state and then receives the change through i
 }
 
 test "context drives neutral API end to end against headless" {
-    const h = try headless_mod.Headless.init(std.testing.allocator);
+    const h = try headless_mod.Headless.init(std.testing.allocator, std.testing.io);
     const outs = [_]output.Output{.{
         .id = id.OutputId.from(1),
         .name = "HEADLESS-1",

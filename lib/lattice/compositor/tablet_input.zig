@@ -185,8 +185,8 @@ fn onGetTabletSeat(client_data: ?*anyopaque, resource: *Object, tablet_seat_id: 
 
     // Advertise the tool to the client.
     tv2.ZwpTabletSeatV2.sendToolAdded(seat_res, tool_id);
-    tv2.ZwpTabletToolV2.sendType(tool_res, @intFromEnum(tv2.ZwpTabletToolV2.Type.pen));
-    tv2.ZwpTabletToolV2.sendCapability(tool_res, @intFromEnum(tv2.ZwpTabletToolV2.Capability.pressure));
+    tv2.ZwpTabletToolV2.sendType(tool_res, @backingInt(tv2.ZwpTabletToolV2.Type.pen));
+    tv2.ZwpTabletToolV2.sendCapability(tool_res, @backingInt(tv2.ZwpTabletToolV2.Capability.pressure));
     tv2.ZwpTabletToolV2.sendDone(tool_res);
 
     // Track the resources.

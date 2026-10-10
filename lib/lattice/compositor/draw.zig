@@ -610,7 +610,7 @@ test "DrawCache.cursor_pipeline blends a half-transparent texture over a red bac
     const gpa = std.testing.allocator;
 
     // Bring up the software prism device (always available; no GPU required).
-    const sel = prism.drivers.createBestDevice(gpa) orelse return error.NoWorkingDriver;
+    const sel = prism.drivers.createBestDevice(gpa, std.testing.io) orelse return error.NoWorkingDriver;
     var device = sel.device;
     defer device.deinit();
 

@@ -205,7 +205,7 @@ pub const Wayland = struct {
                     // format_table event: fd arrived OOB, size is in the wire body.
                     // Wire layout: header(8) + size(u32=4) = 12 bytes total.
                     // The Reader pos is after the header; read the u32 directly from msg_buf2.
-                    const ft_opcode = @intFromEnum(ld.ZwpLinuxDmabufFeedbackV1.EventOpcode.format_table);
+                    const ft_opcode = @backingInt(ld.ZwpLinuxDmabufFeedbackV1.EventOpcode.format_table);
                     const hdr_obj = std.mem.readInt(u32, msg_buf2[0..4], .little);
                     const hdr_w1 = std.mem.readInt(u32, msg_buf2[4..8], .little);
                     const hdr_op: u16 = @truncate(hdr_w1 & 0xffff);
@@ -239,14 +239,14 @@ pub const Wayland = struct {
             };
             const ev = maybe_ev orelse continue;
             if (ev.interface == &wlp.WlCallback.interface and ev.object_id == cb2_id) {
-                if (ev.opcode == @intFromEnum(wlp.WlCallback.EventOpcode.done)) {
+                if (ev.opcode == @backingInt(wlp.WlCallback.EventOpcode.done)) {
                     imap.remove(cb2_id);
                     done2 = true;
                 }
                 continue;
             }
             if (ev.interface == &wlp.WlDisplay.interface) {
-                if (ev.opcode == @intFromEnum(wlp.WlDisplay.EventOpcode.@"error")) {
+                if (ev.opcode == @backingInt(wlp.WlDisplay.EventOpcode.@"error")) {
                     return error.ServerError;
                 }
                 continue;
@@ -269,11 +269,11 @@ pub const Wayland = struct {
             }
             // Collect zwp_linux_dmabuf_v1 legacy format and modifier events (v3 compositors).
             if (ev.interface == &ld.ZwpLinuxDmabufV1.interface) {
-                if (ev.opcode == @intFromEnum(ld.ZwpLinuxDmabufV1.EventOpcode.format)) {
+                if (ev.opcode == @backingInt(ld.ZwpLinuxDmabufV1.EventOpcode.format)) {
                     // format event: arg[0] = fourcc u32; treat modifier as LINEAR (0).
                     const fourcc = ev.args[0].uint;
                     try dmabuf_formats_init.append(gpa, .{ .fourcc = fourcc, .modifier = 0 });
-                } else if (ev.opcode == @intFromEnum(ld.ZwpLinuxDmabufV1.EventOpcode.modifier)) {
+                } else if (ev.opcode == @backingInt(ld.ZwpLinuxDmabufV1.EventOpcode.modifier)) {
                     // modifier event: arg[0]=fourcc, arg[1]=modifier_hi, arg[2]=modifier_lo
                     const fourcc = ev.args[0].uint;
                     const mod_hi: u64 = ev.args[1].uint;
@@ -289,7 +289,7 @@ pub const Wayland = struct {
             //   done (opcode 0): feedback sequence complete; clean up feedback object.
             //   Other events (main_device, tranche_target_device, tranche_done, tranche_flags): ignored.
             if (ev.interface == &ld.ZwpLinuxDmabufFeedbackV1.interface and ev.object_id == feedback_id) {
-                if (ev.opcode == @intFromEnum(ld.ZwpLinuxDmabufFeedbackV1.EventOpcode.tranche_formats)) {
+                if (ev.opcode == @backingInt(ld.ZwpLinuxDmabufFeedbackV1.EventOpcode.tranche_formats)) {
                     // ev.args[0] = array of bytes (u16 indices, little-endian)
                     const indices_bytes = ev.args[0].array orelse continue;
                     if (fmt_table_map) |ft| {
@@ -305,7 +305,7 @@ pub const Wayland = struct {
                             }
                         }
                     }
-                } else if (ev.opcode == @intFromEnum(ld.ZwpLinuxDmabufFeedbackV1.EventOpcode.done)) {
+                } else if (ev.opcode == @backingInt(ld.ZwpLinuxDmabufFeedbackV1.EventOpcode.done)) {
                     // Feedback sequence complete. Destroy the feedback object and remove from imap.
                     const w2 = &conn.wire_writer;
                     ld.ZwpLinuxDmabufFeedbackV1.destroy(w2, gpa, feedback_id) catch {};
@@ -347,10 +347,10 @@ pub const Wayland = struct {
         const selected: prism.drivers.Selected = blk: {
             if (opts.driver) |dname| {
                 const drv = prism.drivers.select(dname) orelse return error.UnknownDriver;
-                const dev = try drv.createDevice(gpa);
+                const dev = try drv.createDevice(gpa, io);
                 break :blk .{ .driver = drv, .device = dev };
             } else {
-                break :blk prism.drivers.createBestDevice(gpa) orelse return error.NoWorkingDriver;
+                break :blk prism.drivers.createBestDevice(gpa, io) orelse return error.NoWorkingDriver;
             }
         };
         errdefer selected.device.deinit();
@@ -598,7 +598,7 @@ pub const Wayland = struct {
             const wl_wire = wl.wire;
             var pw = wl_wire.Writer.init();
             defer pw.deinit(gpa);
-            try pw.begin(gpa, params_id, @intFromEnum(ld.ZwpLinuxBufferParamsV1.RequestOpcode.add));
+            try pw.begin(gpa, params_id, @backingInt(ld.ZwpLinuxBufferParamsV1.RequestOpcode.add));
             try pw.writeUint(gpa, 0); // plane_idx = 0
             try pw.writeUint(gpa, desc.offset);
             try pw.writeUint(gpa, desc.stride);
@@ -1294,7 +1294,7 @@ pub const Wayland = struct {
                         surface_obj,
                         self.pointer_id,
                         null,
-                        @intFromEnum(pc.ZwpPointerConstraintsV1.Lifetime.persistent),
+                        @backingInt(pc.ZwpPointerConstraintsV1.Lifetime.persistent),
                     ) catch return;
                     self.conn.sendMessage(wire.finish()) catch return;
                     self.imap.set(new_id, &pc.ZwpLockedPointerV1.interface) catch return;
@@ -1308,7 +1308,7 @@ pub const Wayland = struct {
                         surface_obj,
                         self.pointer_id,
                         null,
-                        @intFromEnum(pc.ZwpPointerConstraintsV1.Lifetime.persistent),
+                        @backingInt(pc.ZwpPointerConstraintsV1.Lifetime.persistent),
                     ) catch return;
                     self.conn.sendMessage(wire.finish()) catch return;
                     self.imap.set(new_id, &pc.ZwpConfinedPointerV1.interface) catch return;
@@ -1340,7 +1340,7 @@ pub const Wayland = struct {
 // ----- Output event helpers -----
 
 fn applyOutputEvent(acc: *outputs_mod.OutputAccum, ev: client.DecodedEvent) void {
-    switch (@as(wlp.WlOutput.EventOpcode, @enumFromInt(ev.opcode))) {
+    switch (@as(wlp.WlOutput.EventOpcode, @fromBackingInt(@intCast(ev.opcode)))) {
         .mode => acc.applyMode(
             ev.args[1].int,
             ev.args[2].int,

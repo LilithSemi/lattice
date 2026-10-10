@@ -3,20 +3,20 @@ const std = @import("std");
 pub const SurfaceId = enum(u32) {
     _,
     pub fn from(v: u32) SurfaceId {
-        return @enumFromInt(v);
+        return @fromBackingInt(@intCast(v));
     }
     pub fn value(self: SurfaceId) u32 {
-        return @intFromEnum(self);
+        return @backingInt(self);
     }
 };
 
 pub const OutputId = enum(u32) {
     _,
     pub fn from(v: u32) OutputId {
-        return @enumFromInt(v);
+        return @fromBackingInt(@intCast(v));
     }
     pub fn value(self: OutputId) u32 {
-        return @intFromEnum(self);
+        return @backingInt(self);
     }
 };
 

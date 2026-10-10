@@ -102,7 +102,7 @@ pub fn main(init: std.process.Init) !void {
     };
 
     // Best available prism device (nvidia -> virgl -> software).
-    const sel = prism.drivers.createBestDevice(gpa) orelse {
+    const sel = prism.drivers.createBestDevice(gpa, io) orelse {
         try out.writeAll("FAIL: no prism driver available\n");
         try out.flush();
         std.process.exit(1);
@@ -119,7 +119,7 @@ pub fn main(init: std.process.Init) !void {
 
     // Build full socket path.
     var path_buf: [300]u8 = undefined;
-    const socket_path = try std.fmt.bufPrint(&path_buf, "{s}/{s}", .{ runtime_dir, socket_name });
+    const socket_path = try std.mem.print(&path_buf, "{s}/{s}", .{ runtime_dir, socket_name });
 
     // Connect a client.
     var conn = try client_mod.connect(gpa, io, socket_path);
@@ -190,7 +190,7 @@ pub fn main(init: std.process.Init) !void {
             const ev = maybe_ev orelse continue;
 
             if (ev.interface == &wlp.WlCallback.interface and ev.object_id == sync_cb_id) {
-                if (ev.opcode == @intFromEnum(wlp.WlCallback.EventOpcode.done)) {
+                if (ev.opcode == @backingInt(wlp.WlCallback.EventOpcode.done)) {
                     imap.remove(sync_cb_id);
                     globals_done = true;
                     break;
@@ -198,7 +198,7 @@ pub fn main(init: std.process.Init) !void {
             }
 
             if (ev.interface == &wlp.WlRegistry.interface) {
-                if (ev.opcode == @intFromEnum(wlp.WlRegistry.EventOpcode.global)) {
+                if (ev.opcode == @backingInt(wlp.WlRegistry.EventOpcode.global)) {
                     const gname = ev.args[0].uint;
                     const ifc = ev.args[1].string orelse continue;
                     const ver = ev.args[2].uint;
@@ -442,7 +442,7 @@ pub fn main(init: std.process.Init) !void {
         surface_id,
         pointer_id,
         null,
-        @intFromEnum(pc.ZwpPointerConstraintsV1.Lifetime.persistent),
+        @backingInt(pc.ZwpPointerConstraintsV1.Lifetime.persistent),
     );
     try conn.sendMessage(conn.wire_writer.finish());
     try imap.set(locked_pointer_id, &pc.ZwpLockedPointerV1.interface);
@@ -487,7 +487,7 @@ pub fn main(init: std.process.Init) !void {
 
             // xdg_wm_base.ping - pong is required.
             if (ev.interface == &xdg.XdgWmBase.interface) {
-                if (ev.opcode == @intFromEnum(xdg.XdgWmBase.EventOpcode.ping)) {
+                if (ev.opcode == @backingInt(xdg.XdgWmBase.EventOpcode.ping)) {
                     try xdg.XdgWmBase.pong(&conn.wire_writer, gpa, xdg_wm_base_id, ev.args[0].uint);
                     try conn.sendMessage(conn.wire_writer.finish());
                 }
@@ -501,7 +501,7 @@ pub fn main(init: std.process.Init) !void {
 
             // xdg_surface.configure - must ack_configure then attach buffer + commit.
             if (ev.interface == &xdg.XdgSurface.interface and ev.object_id == xdg_surface_id) {
-                if (ev.opcode == @intFromEnum(xdg.XdgSurface.EventOpcode.configure)) {
+                if (ev.opcode == @backingInt(xdg.XdgSurface.EventOpcode.configure)) {
                     const serial = ev.args[0].uint;
                     std.debug.print("[e2e] xdg_surface configure serial={d}\n", .{serial});
                     // ack_configure.
@@ -520,7 +520,7 @@ pub fn main(init: std.process.Init) !void {
 
             // wl_pointer.motion - must NOT arrive while locked.
             if (ev.interface == &wlp.WlPointer.interface and ev.object_id == pointer_id) {
-                if (ev.opcode == @intFromEnum(wlp.WlPointer.EventOpcode.motion)) {
+                if (ev.opcode == @backingInt(wlp.WlPointer.EventOpcode.motion)) {
                     test_state.got_motion = true;
                     std.debug.print("[e2e] UNEXPECTED wl_pointer.motion received!\n", .{});
                 }
@@ -529,7 +529,7 @@ pub fn main(init: std.process.Init) !void {
 
             // zwp_relative_pointer_v1.relative_motion - the event we want.
             if (ev.interface == &rp.ZwpRelativePointerV1.interface and ev.object_id == rel_pointer_id) {
-                if (ev.opcode == @intFromEnum(rp.ZwpRelativePointerV1.EventOpcode.relative_motion)) {
+                if (ev.opcode == @backingInt(rp.ZwpRelativePointerV1.EventOpcode.relative_motion)) {
                     if (ev.args.len >= 6) {
                         test_state.got_relative = true;
                         // args[2]=dx, args[3]=dy (fixed-point)
@@ -545,7 +545,7 @@ pub fn main(init: std.process.Init) !void {
 
             // zwp_locked_pointer_v1.locked - confirms constraint is active.
             if (ev.interface == &pc.ZwpLockedPointerV1.interface and ev.object_id == locked_pointer_id) {
-                if (ev.opcode == @intFromEnum(pc.ZwpLockedPointerV1.EventOpcode.locked)) {
+                if (ev.opcode == @backingInt(pc.ZwpLockedPointerV1.EventOpcode.locked)) {
                     test_state.got_locked = true;
                     std.debug.print("[e2e] zwp_locked_pointer_v1.locked received\n", .{});
                 }

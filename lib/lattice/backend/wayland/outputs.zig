@@ -113,8 +113,8 @@ test "applyName copies up to 64 bytes" {
 
 test "applyName truncates to 64 bytes" {
     var accum = OutputAccum{ .id = 1 };
-    const long_name = "a" ** 100;
-    accum.applyName(long_name);
+    const long_name: [100]u8 = @splat('a');
+    accum.applyName(&long_name);
     try std.testing.expectEqual(@as(usize, 64), accum.name_len);
 }
 

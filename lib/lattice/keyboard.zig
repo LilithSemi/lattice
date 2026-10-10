@@ -277,7 +277,7 @@ pub const KeyboardState = struct {
             .alt = st.modNameIsActive("Mod1", .effective),
             .super = st.modNameIsActive("Mod4", .effective),
         };
-        var out = Translated{ .keysym = @intFromEnum(sym), .mods = mods };
+        var out = Translated{ .keysym = @backingInt(sym), .mods = mods };
         // Text on a press only, and never with ctrl or alt held: a text field
         // inserts `text` blindly, so a shortcut must not carry any. This is the
         // same rule phantom's terminal decoder applies. Named keys like Tab and

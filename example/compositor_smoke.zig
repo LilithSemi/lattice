@@ -22,7 +22,7 @@ pub fn main(init: std.process.Init) !void {
     };
 
     // Bring up the best available prism device (nvidia on this box, else software).
-    const sel = prism.drivers.createBestDevice(gpa) orelse {
+    const sel = prism.drivers.createBestDevice(gpa, io) orelse {
         try out.writeAll("error: no prism driver available\n");
         try out.flush();
         std.process.exit(1);
@@ -40,7 +40,7 @@ pub fn main(init: std.process.Init) !void {
 
     // Verify the socket file exists by opening it with O_PATH.
     var path_buf: [300]u8 = undefined;
-    const path = std.fmt.bufPrintZ(&path_buf, "{s}/{s}", .{ runtime_dir, name }) catch {
+    const path = std.mem.printSentinel(&path_buf, "{s}/{s}", .{ runtime_dir, name }, 0) catch {
         try out.writeAll("error: path too long\n");
         try out.flush();
         std.process.exit(1);

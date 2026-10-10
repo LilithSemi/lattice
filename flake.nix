@@ -59,7 +59,7 @@
         {
           default = pkgs.mkShell {
             packages = with pkgs; [
-              zig
+              zig_0_17
             ];
           };
         }
@@ -76,13 +76,13 @@
 
             src = lib.cleanSource ./.;
 
-            zigDeps = pkgs.zig.fetchDeps {
+            zigDeps = pkgs.zig_0_17.fetchDeps {
               inherit (finalAttrs) src pname version;
-              hash = "sha256-cb4XuwA7XrtBDqnEvWzNwKanTIs4MIF3ak09asfp1E8=";
+              hash = "sha256-ec7MZZo7jq6biRq4M21HIQ4RJl97/TBlDNYiVnHPTEw=";
             };
 
             nativeBuildInputs = with pkgs; [
-              zig
+              zig_0_17
             ];
 
             postConfigure = ''

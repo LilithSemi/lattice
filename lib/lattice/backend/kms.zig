@@ -54,7 +54,7 @@ pub const Kms = struct {
         var dev = try device.Device.openWithFd(gpa, drm_fd);
         errdefer dev.deinit(); // no-op (owns_fd=false), harmless
 
-        const pdev = try prism.virgl.createDevice(gpa, .{ .external_fd = drm_fd });
+        const pdev = try prism.virgl.createDevice(gpa, io, .{ .external_fd = drm_fd });
         errdefer pdev.deinit();
 
         const vdev = prism.virgl.deviceOf(pdev);

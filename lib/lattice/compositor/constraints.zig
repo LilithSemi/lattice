@@ -294,7 +294,7 @@ fn createConstraint(
     // Check for existing live constraint on this surface.
     if (surfaceHasConstraint(ctx.list.items, surf_id)) {
         resource.postError(
-            @intFromEnum(pc.ZwpPointerConstraintsV1.Error.already_constrained),
+            @backingInt(pc.ZwpPointerConstraintsV1.Error.already_constrained),
             "surface {d} already has an active constraint",
             .{surf_id},
         );
@@ -303,8 +303,8 @@ fn createConstraint(
 
     // Decode lifetime.
     const lifetime: Lifetime = switch (lifetime_) {
-        @intFromEnum(pc.ZwpPointerConstraintsV1.Lifetime.oneshot) => .oneshot,
-        @intFromEnum(pc.ZwpPointerConstraintsV1.Lifetime.persistent) => .persistent,
+        @backingInt(pc.ZwpPointerConstraintsV1.Lifetime.oneshot) => .oneshot,
+        @backingInt(pc.ZwpPointerConstraintsV1.Lifetime.persistent) => .persistent,
         else => .oneshot,
     };
 

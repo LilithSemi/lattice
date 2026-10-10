@@ -24,7 +24,7 @@ pub const Headless = struct {
     tw: u32 = 0,
     th: u32 = 0,
 
-    pub fn init(alloc: std.mem.Allocator) !*Headless {
+    pub fn init(alloc: std.mem.Allocator, io: std.Io) !*Headless {
         const self = try alloc.create(Headless);
         errdefer alloc.destroy(self);
         self.* = .{
@@ -35,7 +35,7 @@ pub const Headless = struct {
             .ctx = undefined,
         };
 
-        const selected = prism.drivers.createBestDevice(alloc) orelse return error.NoWorkingDriver;
+        const selected = prism.drivers.createBestDevice(alloc, io) orelse return error.NoWorkingDriver;
         self.device = selected.device;
         errdefer self.device.deinit();
 
@@ -183,7 +183,7 @@ pub const Headless = struct {
 };
 
 test "headless backend creates surfaces and drains scripted events" {
-    const h = try Headless.init(std.testing.allocator);
+    const h = try Headless.init(std.testing.allocator, std.testing.io);
     defer h.backend().deinit();
     const b = h.backend();
 
@@ -209,7 +209,7 @@ test "headless backend creates surfaces and drains scripted events" {
 }
 
 test "headless reports pointer and keyboard but no touch until scripted otherwise" {
-    const h = try Headless.init(std.testing.allocator);
+    const h = try Headless.init(std.testing.allocator, std.testing.io);
     defer h.backend().deinit();
     const b = h.backend();
 
@@ -225,14 +225,14 @@ test "headless reports pointer and keyboard but no touch until scripted otherwis
 }
 
 test "headless backend renderDevice returns the prism device" {
-    const h = try Headless.init(std.testing.allocator);
+    const h = try Headless.init(std.testing.allocator, std.testing.io);
     defer h.backend().deinit();
     const b = h.backend();
     try std.testing.expect(b.renderDevice() != null);
 }
 
 test "headless renders a clear color into its offscreen target (readback)" {
-    const h = try Headless.init(std.testing.allocator);
+    const h = try Headless.init(std.testing.allocator, std.testing.io);
     defer h.backend().deinit();
     const b = h.backend();
 

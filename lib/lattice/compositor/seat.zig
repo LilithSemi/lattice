@@ -881,8 +881,7 @@ test "selectKeymap: error selects static MINIMAL fallback" {
 
 test "buildRealKeymap: nonexistent XKB root returns error (fallback path)" {
     const testing = std.testing;
-    var threaded: std.Io.Threaded = .init_single_threaded;
-    const io = threaded.io();
+    const io = std.testing.io;
     // The exact error tag depends on xkbcommon internals (missing rules file,
     // include resolution, or parse); we only assert it FAILS so init selects
     // the MINIMAL fallback. No buffer is returned on error, nothing to free.
