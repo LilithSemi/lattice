@@ -4,6 +4,7 @@ const color = @import("color.zig");
 const surface = @import("surface.zig");
 const output = @import("output.zig");
 const event = @import("event.zig");
+const text_input = @import("text_input.zig");
 const prism = @import("prism");
 
 /// Coarse backend-wide capability hint. Per-output HDR truth lives in Output.hdr (HdrCaps);
@@ -56,6 +57,9 @@ pub const VTable = struct {
     /// Apply/clear a pointer constraint on the real (backend) pointer. Nested
     /// forwards to the parent (lock/confine/destroy); KMS + headless no-op.
     applyPointerConstraint: *const fn (self: *anyopaque, req: PointerConstraintReq) void,
+    /// Enable, update, or disable virtual-keyboard/IME input for a surface.
+    /// Backends without an input-method integration may leave this null.
+    setTextInput: ?*const fn (self: *anyopaque, surface: id.SurfaceId, state: ?text_input.State) anyerror!void = null,
     deinit: *const fn (self: *anyopaque) void,
 };
 
@@ -101,6 +105,10 @@ pub const Backend = struct {
     }
     pub fn applyPointerConstraint(self: Backend, req: PointerConstraintReq) void {
         self.vtable.applyPointerConstraint(self.ptr, req);
+    }
+    pub fn setTextInput(self: Backend, s: id.SurfaceId, state: ?text_input.State) !void {
+        const set = self.vtable.setTextInput orelse return error.Unsupported;
+        try set(self.ptr, s, state);
     }
     pub fn deinit(self: Backend) void {
         self.vtable.deinit(self.ptr);

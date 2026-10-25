@@ -75,6 +75,7 @@ pub fn build(b: *std.Build) void {
     root_module.addImport("libseat", libseat_dep.module("libseat"));
     root_module.addImport("udev", udev_dep.module("udev"));
     root_module.addImport("libinput", libinput_dep.module("libinput"));
+    if (target.result.abi.isAndroid()) root_module.linkSystemLibrary("android", .{});
 
     const example = b.addExecutable(.{
         .name = "lattice-window",

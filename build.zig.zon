@@ -37,8 +37,8 @@
             .hash = "libseat-0.1.0-q6LEcxXFAQAY0tj0O6xwKJa1gxV8m52yF3z_qbjN2Az5",
         },
         .prism = .{
-            .url = "git+https://git.lilithsemi.com/LilithSemi/prism.git#4c448de0bb18153d2f1629344f2448b7f1f7f79b",
-            .hash = "prism-0.1.0-PSE12AXEOAAYDw_bTCWN79Ld-mKZW0ezu7reHBXzgqBh",
+            .url = "git+https://git.lilithsemi.com/LilithSemi/prism#459b4f8be254adc5ad983ed51ca75d36f2f08714",
+            .hash = "prism-0.1.0-PSE12GPVOQCMqpdgst1fVLMQ5AQJ94Fg6oMQH3KYVF8n",
         },
     },
     .paths = .{ "build.zig", "build.zig.zon", "lib" },

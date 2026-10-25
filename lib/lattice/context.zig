@@ -4,6 +4,7 @@ const id = @import("id.zig");
 const surface = @import("surface.zig");
 const output = @import("output.zig");
 const event = @import("event.zig");
+const text_input = @import("text_input.zig");
 const backendMod = @import("backend.zig");
 const options_mod = @import("options.zig");
 const prism = @import("prism");
@@ -136,6 +137,10 @@ pub const Context = struct {
     /// or display server (KMS backend) can enforce the hardware pointer constraint.
     pub fn applyPointerConstraint(self: *Context, req: backendMod.PointerConstraintReq) void {
         self.backend.applyPointerConstraint(req);
+    }
+
+    pub fn setTextInput(self: *Context, s: id.SurfaceId, state: ?text_input.State) !void {
+        try self.backend.setTextInput(s, state);
     }
 
     pub fn poll(self: *Context, timeout_ms: ?u32, handler: Handler, handler_ctx: *anyopaque) !void {

@@ -1,5 +1,6 @@
 const std = @import("std");
 const id = @import("id.zig");
+const text_input = @import("text_input.zig");
 
 pub const KeyState = enum { pressed, released };
 pub const ButtonState = enum { pressed, released };
@@ -57,6 +58,7 @@ pub const InputEvent = union(enum) {
     pointer_relative: PointerRelative,
     touch_down: TouchPoint,
     touch_up: TouchPoint,
+    touch_cancel: TouchPoint,
     touch_motion: TouchPoint,
     tablet_proximity: TabletProximity,
     tablet_tip: TabletTip,
@@ -89,6 +91,7 @@ pub const Event = union(enum) {
     output_added: id.OutputId,
     output_removed: id.OutputId,
     input: InputEvent,
+    text_input: text_input.SurfaceEvent,
     /// The backend's session became active (e.g. a VT switch back to us): the
     /// compositor should resume rendering. Neutral across backends (KMS emits it
     /// from the seat's enable; a future Windows/macOS backend maps its own

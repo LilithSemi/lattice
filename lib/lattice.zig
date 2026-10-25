@@ -27,6 +27,10 @@ pub const Event = event.Event;
 pub const InputEvent = event.InputEvent;
 pub const SeatCapabilities = event.SeatCapabilities;
 
+pub const text_input = @import("lattice/text_input.zig");
+pub const TextInputState = text_input.State;
+pub const TextInputEvent = text_input.Event;
+
 pub const keyboard = @import("lattice/keyboard.zig");
 pub const KeyboardState = keyboard.KeyboardState;
 
@@ -45,6 +49,7 @@ pub const Capabilities = backend.Capabilities;
 
 pub const backends = struct {
     pub const Headless = @import("lattice/backend/headless.zig").Headless;
+    pub const Android = @import("lattice/backend/android.zig").Android;
     pub const backends_wayland = @import("lattice/backend/wayland.zig");
 };
 
