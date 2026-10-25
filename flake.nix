@@ -60,6 +60,8 @@
           default = pkgs.mkShell {
             packages = with pkgs; [
               zig_0_17
+              pkg-config
+              vulkan-loader
             ];
           };
         }
@@ -78,7 +80,7 @@
 
             zigDeps = pkgs.zig_0_17.fetchDeps {
               inherit (finalAttrs) src pname version;
-              hash = "sha256-DOiZRnHpKT+Fw+XIz0w4UJvQ3u5S11zWtND2oIheBR0=";
+              hash = "sha256-DZfSVmfi8mw2fMXHh+xHRuHjRMorxcNK/AGEPIdXc4s=";
             };
 
             nativeBuildInputs = with pkgs; [
