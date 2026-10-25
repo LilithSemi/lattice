@@ -131,7 +131,7 @@ test "wl keyboard key -> neutral key (raw code, mapped state)" {
 }
 
 test "wl pointer button + axis" {
-    const b = inputFromLogical(.{ .wl_pointer_button = .{ .button = 0x110, .state = 1 } }, id.SurfaceId.from(1)).?;
+    const b = inputFromLogical(.{ .wl_pointer_button = .{ .serial = 7, .button = 0x110, .state = 1 } }, id.SurfaceId.from(1)).?;
     try std.testing.expect(b == .pointer_button);
     try std.testing.expectEqual(nev.ButtonState.pressed, b.pointer_button.state);
     const a = inputFromLogical(.{ .wl_pointer_axis = .{ .axis = 0, .value = 4.0 } }, id.SurfaceId.from(1)).?;

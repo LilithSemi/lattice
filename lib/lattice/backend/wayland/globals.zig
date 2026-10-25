@@ -17,6 +17,7 @@ const cm = @import("color_management");
 const rp = @import("relative_pointer");
 const pc = @import("pointer_constraints");
 const tv2 = @import("tablet_v2");
+const deco = @import("xdg_decoration");
 
 const client = wl.client;
 const Argument = wl.Argument;
@@ -109,6 +110,8 @@ pub const BoundIds = struct {
     pointer_constraints_id: u32 = 0,
     /// 0 if the compositor did not advertise zwp_tablet_manager_v2.
     tablet_manager_id: u32 = 0,
+    /// 0 if the compositor did not advertise zxdg_decoration_manager_v1.
+    decoration_manager_id: u32 = 0,
 };
 
 /// Find a global by interface name, or null.
@@ -137,6 +140,7 @@ pub fn bindStandards(
     var relative_pointer_manager_id: u32 = 0;
     var pointer_constraints_id: u32 = 0;
     var tablet_manager_id: u32 = 0;
+    var decoration_manager_id: u32 = 0;
     var output_ids: std.ArrayList(u32) = .empty;
     errdefer output_ids.deinit(gpa);
 
@@ -191,6 +195,11 @@ pub fn bindStandards(
             const oid = try client.bindGlobal(conn, registry_id, g.name, "zwp_tablet_manager_v2", ver);
             try imap.set(oid, &tv2.ZwpTabletManagerV2.interface);
             tablet_manager_id = oid;
+        } else if (std.mem.eql(u8, g.interface, "zxdg_decoration_manager_v1")) {
+            const ver = @min(g.version, deco.ZxdgDecorationManagerV1.version);
+            const oid = try client.bindGlobal(conn, registry_id, g.name, "zxdg_decoration_manager_v1", ver);
+            try imap.set(oid, &deco.ZxdgDecorationManagerV1.interface);
+            decoration_manager_id = oid;
         }
     }
 
@@ -209,6 +218,7 @@ pub fn bindStandards(
         .relative_pointer_manager_id = relative_pointer_manager_id,
         .pointer_constraints_id = pointer_constraints_id,
         .tablet_manager_id = tablet_manager_id,
+        .decoration_manager_id = decoration_manager_id,
     };
 }
 

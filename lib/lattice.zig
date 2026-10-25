@@ -2,6 +2,9 @@
 //! pieces as namespaces: `lattice.Context`, `lattice.Surface`, `lattice.Output`,
 //! `lattice.Event`, `lattice.color`.
 const std = @import("std");
+const enabled = @import("lattice/backends_enabled.zig");
+
+pub const backends_enabled = enabled;
 
 pub const name = "lattice";
 
@@ -43,14 +46,22 @@ pub const Surface = surface.Surface;
 pub const SurfaceDesc = surface.SurfaceDesc;
 pub const RenderTarget = surface.RenderTarget;
 
+pub const window_chrome = @import("lattice/window_chrome.zig");
+pub const DecorationMode = window_chrome.DecorationMode;
+pub const ResizeEdge = window_chrome.ResizeEdge;
+pub const WindowState = window_chrome.WindowState;
+pub const WindowConfigure = window_chrome.Configure;
+pub const WindowPosition = window_chrome.Position;
+pub const WindowSize = window_chrome.Size;
+
 pub const backend = @import("lattice/backend.zig");
 pub const Backend = backend.Backend;
 pub const Capabilities = backend.Capabilities;
 
 pub const backends = struct {
-    pub const Headless = @import("lattice/backend/headless.zig").Headless;
+    pub const Headless = if (enabled.client_headless) @import("lattice/backend/headless.zig").Headless else void;
     pub const Android = @import("lattice/backend/android.zig").Android;
-    pub const backends_wayland = @import("lattice/backend/wayland.zig");
+    pub const backends_wayland = if (enabled.client_wayland) @import("lattice/backend/wayland.zig") else void;
 };
 
 pub const context = @import("lattice/context.zig");
@@ -60,34 +71,34 @@ pub const ClientInfo = context.ClientInfo;
 
 pub const render = @import("lattice/render.zig");
 
-pub const outputs_internal = @import("lattice/backend/wayland/outputs.zig");
-pub const shmbuffer_internal = @import("lattice/backend/wayland/shmbuffer.zig");
-pub const dispatch_internal = @import("lattice/backend/wayland/dispatch.zig");
-pub const wayland_color_internal = @import("lattice/backend/wayland/color.zig");
-pub const surface_state_internal = @import("lattice/compositor/surface_state.zig");
+pub const outputs_internal = if (enabled.client_wayland) @import("lattice/backend/wayland/outputs.zig") else void;
+pub const shmbuffer_internal = if (enabled.client_wayland) @import("lattice/backend/wayland/shmbuffer.zig") else void;
+pub const dispatch_internal = if (enabled.client_wayland) @import("lattice/backend/wayland/dispatch.zig") else void;
+pub const wayland_color_internal = if (enabled.client_wayland) @import("lattice/backend/wayland/color.zig") else void;
+pub const surface_state_internal = if (enabled.compositor_wayland) @import("lattice/compositor/surface_state.zig") else void;
 
-pub const compositor_types = @import("lattice/compositor/hosted.zig");
-pub const HostedSurface = compositor_types.HostedSurface;
-pub const CompositorEvent = compositor_types.CompositorEvent;
+pub const compositor_types = if (enabled.compositor_wayland) @import("lattice/compositor/hosted.zig") else void;
+pub const HostedSurface = if (enabled.compositor_wayland) compositor_types.HostedSurface else void;
+pub const CompositorEvent = if (enabled.compositor_wayland) compositor_types.CompositorEvent else void;
 
-pub const compositor = @import("lattice/compositor.zig");
-pub const Compositor = compositor.Compositor;
-pub const Rect = compositor.Rect;
+pub const compositor = if (enabled.compositor_wayland) @import("lattice/compositor.zig") else void;
+pub const Compositor = if (enabled.compositor_wayland) compositor.Compositor else void;
+pub const Rect = if (enabled.compositor_wayland) compositor.Rect else void;
 
-pub const compositor_xdg = @import("lattice/compositor/xdg.zig");
-pub const compositor_draw = @import("lattice/compositor/draw.zig");
-pub const compositor_seat = @import("lattice/compositor/seat.zig");
-pub const compositor_color_manager = @import("lattice/compositor/color_manager.zig");
-pub const constraints_internal = @import("lattice/compositor/constraints.zig");
-pub const tablet_input_internal = @import("lattice/compositor/tablet_input.zig");
+pub const compositor_xdg = if (enabled.compositor_wayland) @import("lattice/compositor/xdg.zig") else void;
+pub const compositor_draw = if (enabled.compositor_wayland) @import("lattice/compositor/draw.zig") else void;
+pub const compositor_seat = if (enabled.compositor_wayland) @import("lattice/compositor/seat.zig") else void;
+pub const compositor_color_manager = if (enabled.compositor_wayland) @import("lattice/compositor/color_manager.zig") else void;
+pub const constraints_internal = if (enabled.compositor_wayland) @import("lattice/compositor/constraints.zig") else void;
+pub const tablet_input_internal = if (enabled.compositor_wayland) @import("lattice/compositor/tablet_input.zig") else void;
 
 pub const format_map = @import("lattice/format_map.zig");
 
 pub const dmabuf_bindings_test = @import("lattice/dmabuf_bindings_test.zig");
 pub const color_management_bindings_test = @import("lattice/color_management_bindings_test.zig");
 pub const xkbcommon_bindings_test = @import("lattice/xkbcommon_bindings_test.zig");
-pub const kms_input_internal = @import("lattice/backend/kms/input.zig");
-pub const wayland_input_internal = @import("lattice/backend/wayland/input.zig");
+pub const kms_input_internal = if (enabled.client_kms) @import("lattice/backend/kms/input.zig") else void;
+pub const wayland_input_internal = if (enabled.client_wayland) @import("lattice/backend/wayland/input.zig") else void;
 
 test "module compiles and name is set" {
     try std.testing.expectEqualStrings("lattice", name);

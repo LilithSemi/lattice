@@ -8,6 +8,7 @@ const prism = @import("prism");
 
 const id_mod = @import("../../id.zig");
 const surface_mod = @import("../../surface.zig");
+const window_chrome = @import("../../window_chrome.zig");
 const shmbuffer_mod = @import("shmbuffer.zig");
 
 pub const shmbuffer = shmbuffer_mod;
@@ -38,6 +39,9 @@ pub const Window = struct {
     wl_surface_id: u32,
     xdg_surface_id: u32,
     xdg_toplevel_id: u32,
+    decoration_id: u32 = 0,
+    decoration_mode: window_chrome.DecorationMode = .client_side,
+    state: window_chrome.WindowState = .{},
     width: u32,
     height: u32,
     configured: bool = false,

@@ -19,6 +19,7 @@ const prism = @import("prism");
 const rp = @import("relative_pointer");
 const pc = @import("pointer_constraints");
 const tv2 = @import("tablet_v2");
+const deco = @import("xdg_decoration");
 
 const client = wl.client;
 
@@ -28,6 +29,7 @@ const surface_mod = @import("../surface.zig");
 const output_mod = @import("../output.zig");
 const id_mod = @import("../id.zig");
 const options_mod = @import("../options.zig");
+const window_chrome = @import("../window_chrome.zig");
 
 const globals_mod = @import("wayland/globals.zig");
 const keyboard_mod = @import("../keyboard.zig");
@@ -52,6 +54,12 @@ pub const DmabufFormat = struct {
 /// offset, modifier).
 pub const DmaBufDesc = prism.hal.DmaBufDesc;
 
+const ButtonPress = struct {
+    surface: id_mod.SurfaceId,
+    button: u32,
+    serial: u32,
+};
+
 pub const Wayland = struct {
     gpa: std.mem.Allocator,
     io: std.Io,
@@ -61,6 +69,8 @@ pub const Wayland = struct {
     compositor_id: u32,
     shm_id: u32,
     xdg_wm_base_id: u32,
+    /// 0 if the compositor did not advertise zxdg_decoration_manager_v1.
+    decoration_manager_id: u32,
     /// 0 if the compositor did not advertise zwp_linux_dmabuf_v1.
     zwp_linux_dmabuf_id: u32,
     /// 0 if the compositor did not advertise wp_color_manager_v1.
@@ -98,6 +108,8 @@ pub const Wayland = struct {
     active_constraint_kind: enum { none, lock, confine } = .none,
     /// The surface the pointer is over, tracked from wl_pointer.enter.
     focus_surface: ?id_mod.SurfaceId = null,
+    button_presses: [8]ButtonPress = undefined,
+    button_press_count: usize = 0,
     /// The surface holding KEYBOARD focus, tracked from wl_keyboard.enter. Key
     /// events go here, not to the pointer surface: the two foci are independent
     /// on every compositor.
@@ -385,6 +397,7 @@ pub const Wayland = struct {
             .compositor_id = bound.compositor_id,
             .shm_id = bound.shm_id,
             .xdg_wm_base_id = bound.xdg_wm_base_id,
+            .decoration_manager_id = bound.decoration_manager_id,
             .zwp_linux_dmabuf_id = bound.zwp_linux_dmabuf_id,
             .wp_color_manager_id = bound.wp_color_manager_id,
             .dmabuf_formats = dmabuf_formats_init,
@@ -521,6 +534,13 @@ pub const Wayland = struct {
             }
         }
 
+        // The decoration object must be destroyed before its xdg_toplevel.
+        if (win.decoration_id != 0) {
+            deco.ZxdgToplevelDecorationV1.destroy(w, gpa, win.decoration_id) catch {};
+            self.conn.sendMessage(w.finish()) catch {};
+            self.imap.remove(win.decoration_id);
+        }
+
         // Destroy xdg/wl objects in reverse order.
         xdg.XdgToplevel.destroy(w, gpa, win.xdg_toplevel_id) catch {};
         self.conn.sendMessage(w.finish()) catch {};
@@ -552,6 +572,15 @@ pub const Wayland = struct {
         // Remove any pending dmabuf params object from imap (in-flight async create).
         if (self.surfaces.items[i].pending_create) |pend_create| {
             self.imap.remove(pend_create.params_id);
+        }
+
+        if (self.focus_surface == sid) self.focus_surface = null;
+        if (self.key_focus == sid) self.key_focus = null;
+        for (self.button_presses[0..self.button_press_count]) |press| {
+            if (press.surface == sid) {
+                self.button_press_count = 0;
+                break;
+            }
         }
 
         _ = self.surfaces.orderedRemove(i);
@@ -632,7 +661,7 @@ pub const Wayland = struct {
     }
 
     fn capabilities(_: *anyopaque) lattice_backend.Capabilities {
-        return .{ .hdr = false, .formats = &.{.xrgb8888} };
+        return .{ .hdr = false, .formats = &.{.xrgb8888}, .window_chrome = true };
     }
 
     fn seatCapabilities(ptr: *anyopaque) event_mod.SeatCapabilities {
@@ -689,6 +718,32 @@ pub const Wayland = struct {
             try self.conn.sendMessage(w.finish());
         }
 
+        if (desc.app_id.len > 0) {
+            try xdg.XdgToplevel.setAppId(w, gpa, xdg_toplevel_id, desc.app_id);
+            try self.conn.sendMessage(w.finish());
+        }
+
+        var decoration_id: u32 = 0;
+        if (self.decoration_manager_id != 0) {
+            decoration_id = self.conn.objects.allocId();
+            try deco.ZxdgDecorationManagerV1.getToplevelDecoration(
+                w,
+                gpa,
+                self.decoration_manager_id,
+                decoration_id,
+                xdg_toplevel_id,
+            );
+            try self.conn.sendMessage(w.finish());
+            try self.imap.set(decoration_id, &deco.ZxdgToplevelDecorationV1.interface);
+            try deco.ZxdgToplevelDecorationV1.setMode(
+                w,
+                gpa,
+                decoration_id,
+                @backingInt(desc.decoration_mode),
+            );
+            try self.conn.sendMessage(w.finish());
+        }
+
         // wl_surface.commit (initial commit with no buffer triggers the first configure)
         try wlp.WlSurface.commit(w, gpa, wl_surface_id);
         try self.conn.sendMessage(w.finish());
@@ -719,6 +774,8 @@ pub const Wayland = struct {
             .wl_surface_id = wl_surface_id,
             .xdg_surface_id = xdg_surface_id,
             .xdg_toplevel_id = xdg_toplevel_id,
+            .decoration_id = decoration_id,
+            .decoration_mode = .client_side,
             .width = desc.width,
             .height = desc.height,
             .desc = desc,
@@ -731,6 +788,122 @@ pub const Wayland = struct {
 
     fn destroySurface(ptr: *anyopaque, sid: id_mod.SurfaceId) void {
         cast(ptr).destroySurfaceImpl(sid);
+    }
+
+    fn windowCommand(ptr: *anyopaque, sid: id_mod.SurfaceId, command: window_chrome.Command) anyerror!void {
+        const self = cast(ptr);
+        var win: ?*Window = null;
+        for (self.surfaces.items) |*candidate| {
+            if (candidate.id == sid) {
+                win = candidate;
+                break;
+            }
+        }
+        const target = win orelse return error.NoSurface;
+        const gpa = self.gpa;
+        const wire = &self.conn.wire_writer;
+
+        switch (command) {
+            .set_title => |title| try xdg.XdgToplevel.setTitle(wire, gpa, target.xdg_toplevel_id, title),
+            .set_app_id => |app_id| try xdg.XdgToplevel.setAppId(wire, gpa, target.xdg_toplevel_id, app_id),
+            .set_decoration_mode => |mode| {
+                if (target.decoration_id == 0) {
+                    if (mode == .client_side) return;
+                    return error.Unsupported;
+                }
+                try deco.ZxdgToplevelDecorationV1.setMode(wire, gpa, target.decoration_id, @backingInt(mode));
+            },
+            .move => {
+                const press = self.activePress(sid) orelse return error.NoActivePointerPress;
+                try xdg.XdgToplevel.move(wire, gpa, target.xdg_toplevel_id, self.seat_id, press.serial);
+            },
+            .resize => |edge| {
+                const press = self.activePress(sid) orelse return error.NoActivePointerPress;
+                try xdg.XdgToplevel.resize(wire, gpa, target.xdg_toplevel_id, self.seat_id, press.serial, @backingInt(edge));
+            },
+            .set_maximized => |enabled| {
+                if (enabled) {
+                    try xdg.XdgToplevel.setMaximized(wire, gpa, target.xdg_toplevel_id);
+                } else {
+                    try xdg.XdgToplevel.unsetMaximized(wire, gpa, target.xdg_toplevel_id);
+                }
+            },
+            .minimize => try xdg.XdgToplevel.setMinimized(wire, gpa, target.xdg_toplevel_id),
+            .set_fullscreen => |enabled| {
+                if (enabled) {
+                    try xdg.XdgToplevel.setFullscreen(wire, gpa, target.xdg_toplevel_id, null);
+                } else {
+                    try xdg.XdgToplevel.unsetFullscreen(wire, gpa, target.xdg_toplevel_id);
+                }
+            },
+            .show_window_menu => |position| {
+                const press = self.activePress(sid) orelse return error.NoActivePointerPress;
+                try xdg.XdgToplevel.showWindowMenu(
+                    wire,
+                    gpa,
+                    target.xdg_toplevel_id,
+                    self.seat_id,
+                    press.serial,
+                    position.x,
+                    position.y,
+                );
+            },
+            .set_min_size => |size| try xdg.XdgToplevel.setMinSize(
+                wire,
+                gpa,
+                target.xdg_toplevel_id,
+                std.math.cast(i32, size.width) orelse return error.InvalidSize,
+                std.math.cast(i32, size.height) orelse return error.InvalidSize,
+            ),
+            .set_max_size => |size| try xdg.XdgToplevel.setMaxSize(
+                wire,
+                gpa,
+                target.xdg_toplevel_id,
+                std.math.cast(i32, size.width) orelse return error.InvalidSize,
+                std.math.cast(i32, size.height) orelse return error.InvalidSize,
+            ),
+        }
+        try self.conn.sendMessage(wire.finish());
+    }
+
+    pub fn recordButtonPress(self: *Wayland, sid: id_mod.SurfaceId, button: u32, serial: u32) void {
+        self.releaseButton(button);
+        if (self.button_press_count == self.button_presses.len) {
+            for (1..self.button_presses.len) |i| {
+                self.button_presses[i - 1] = self.button_presses[i];
+            }
+            self.button_press_count -= 1;
+        }
+        self.button_presses[self.button_press_count] = .{
+            .surface = sid,
+            .button = button,
+            .serial = serial,
+        };
+        self.button_press_count += 1;
+    }
+
+    pub fn releaseButton(self: *Wayland, button: u32) void {
+        var i: usize = 0;
+        while (i < self.button_press_count) : (i += 1) {
+            if (self.button_presses[i].button != button) continue;
+            var j = i + 1;
+            while (j < self.button_press_count) : (j += 1) {
+                self.button_presses[j - 1] = self.button_presses[j];
+            }
+            self.button_press_count -= 1;
+            return;
+        }
+    }
+
+    fn activePress(self: *Wayland, sid: id_mod.SurfaceId) ?ButtonPress {
+        if (self.seat_id == 0) return null;
+        var i = self.button_press_count;
+        while (i > 0) {
+            i -= 1;
+            const press = self.button_presses[i];
+            if (press.surface == sid) return press;
+        }
+        return null;
     }
 
     /// Return a RenderTarget for the given surface, creating or recreating
@@ -1334,8 +1507,34 @@ pub const Wayland = struct {
         .pump = pump,
         .renderDevice = renderDeviceVt,
         .applyPointerConstraint = applyPointerConstraint,
+        .windowCommand = windowCommand,
     };
 };
+
+test "button press serial stays valid only while its button is held" {
+    var wayland: Wayland = undefined;
+    wayland.seat_id = 4;
+    wayland.button_press_count = 0;
+    const surface = id_mod.SurfaceId.from(1);
+
+    wayland.recordButtonPress(surface, 0x110, 17);
+    try std.testing.expectEqual(@as(u32, 17), wayland.activePress(surface).?.serial);
+    wayland.releaseButton(0x110);
+    try std.testing.expect(wayland.activePress(surface) == null);
+}
+
+test "releasing the latest button restores an earlier held press" {
+    var wayland: Wayland = undefined;
+    wayland.seat_id = 4;
+    wayland.button_press_count = 0;
+    const surface = id_mod.SurfaceId.from(1);
+
+    wayland.recordButtonPress(surface, 0x110, 17);
+    wayland.recordButtonPress(surface, 0x111, 23);
+    try std.testing.expectEqual(@as(u32, 23), wayland.activePress(surface).?.serial);
+    wayland.releaseButton(0x111);
+    try std.testing.expectEqual(@as(u32, 17), wayland.activePress(surface).?.serial);
+}
 
 // ----- Output event helpers -----
 

@@ -20,6 +20,7 @@ const xdg = @import("xdg_shell");
 const ld = @import("linux_dmabuf");
 const rp = @import("relative_pointer");
 const tv2 = @import("tablet_v2");
+const deco = @import("xdg_decoration");
 
 const input_mod = @import("input.zig");
 
@@ -31,6 +32,7 @@ const id_mod = @import("../../id.zig");
 const keyboard_mod = @import("../../keyboard.zig");
 const outputs_mod = @import("outputs.zig");
 const window_mod = @import("window.zig");
+const window_chrome = @import("../../window_chrome.zig");
 
 const wayland_mod = @import("../wayland.zig");
 const Wayland = wayland_mod.Wayland;
@@ -45,7 +47,8 @@ const MAX_DRAIN = 64;
 
 pub const LogicalEvent = union(enum) {
     xdg_surface_configure: struct { serial: u32 },
-    xdg_toplevel_configure: struct { width: i32, height: i32 },
+    xdg_toplevel_configure: struct { width: i32, height: i32, states: []const u8 },
+    decoration_configure: struct { mode: u32 },
     xdg_toplevel_close: void,
     frame_done: void,
     wl_buffer_release: void,
@@ -70,10 +73,11 @@ pub const LogicalEvent = union(enum) {
     zwp_linux_buffer_params_created: struct { buffer_id: u32 },
     /// Input: wl_pointer.enter - pointer entered a surface; used for focus tracking only.
     wl_pointer_enter: struct { surface_obj: u32 },
+    wl_pointer_leave: struct { surface_obj: u32 },
     /// Input: wl_pointer.motion - cursor moved over the focused surface.
     wl_pointer_motion: struct { x: f64, y: f64 },
     /// Input: wl_pointer.button - mouse button pressed or released.
-    wl_pointer_button: struct { button: u32, state: u32 },
+    wl_pointer_button: struct { serial: u32, button: u32, state: u32 },
     /// Input: wl_pointer.axis - scroll wheel or other axis event.
     wl_pointer_axis: struct { axis: u32, value: f64 },
     /// Input: wl_keyboard.key - keyboard key pressed or released.
@@ -151,13 +155,20 @@ pub fn classify(
                 .xdg_toplevel_configure = .{
                     .width = args[0].int,
                     .height = args[1].int,
-                    // args[2] is the states array; ignored here
+                    .states = args[2].array orelse &.{},
                 },
             },
             .close => .{ .xdg_toplevel_close = {} },
             // configure_bounds and wm_capabilities: present in the enum but not
             // relevant to this plan - ignore safely.
             .configure_bounds, .wm_capabilities => .other,
+        };
+    }
+
+    if (interface == &deco.ZxdgToplevelDecorationV1.interface) {
+        const op = toOpcode(deco.ZxdgToplevelDecorationV1.EventOpcode, opcode) orelse return .other;
+        return switch (op) {
+            .configure => .{ .decoration_configure = .{ .mode = args[0].uint } },
         };
     }
 
@@ -222,10 +233,11 @@ pub fn classify(
         return switch (op) {
             // enter: args = [serial(u), surface(o), x(f), y(f)]
             .enter => .{ .wl_pointer_enter = .{ .surface_obj = args[1].object orelse 0 } },
+            .leave => .{ .wl_pointer_leave = .{ .surface_obj = args[1].object orelse 0 } },
             // motion: args = [time(u), x(f), y(f)]
             .motion => .{ .wl_pointer_motion = .{ .x = args[1].fixed.toDouble(), .y = args[2].fixed.toDouble() } },
             // button: args = [serial(u), time(u), button(u), state(u)]
-            .button => .{ .wl_pointer_button = .{ .button = args[2].uint, .state = args[3].uint } },
+            .button => .{ .wl_pointer_button = .{ .serial = args[0].uint, .button = args[2].uint, .state = args[3].uint } },
             // axis: args = [time(u), axis(u), value(f)]
             .axis => .{ .wl_pointer_axis = .{ .axis = args[1].uint, .value = args[2].fixed.toDouble() } },
             else => .other,
@@ -382,6 +394,7 @@ pub fn translate(
         // Input events are emitted from handleEvent (focus resolution + emission);
         // translate returns null for all of them.
         .xdg_surface_configure,
+        .decoration_configure,
         .frame_done,
         .wl_buffer_release,
         .wl_output_mode,
@@ -393,6 +406,7 @@ pub fn translate(
         .zwp_linux_buffer_params_failed,
         .zwp_linux_buffer_params_created,
         .wl_pointer_enter,
+        .wl_pointer_leave,
         .wl_pointer_motion,
         .wl_pointer_button,
         .wl_pointer_axis,
@@ -440,6 +454,32 @@ fn findWindowByXdgToplevel(w: *Wayland, xdg_toplevel_id: u32) ?*window_mod.Windo
     return null;
 }
 
+fn findWindowByDecoration(w: *Wayland, decoration_id: u32) ?*window_mod.Window {
+    for (w.surfaces.items) |*win| {
+        if (win.decoration_id == decoration_id) return win;
+    }
+    return null;
+}
+
+fn parseWindowState(bytes: []const u8) window_chrome.WindowState {
+    var state: window_chrome.WindowState = .{};
+    var offset: usize = 0;
+    while (offset + 4 <= bytes.len) : (offset += 4) {
+        switch (std.mem.readInt(u32, bytes[offset..][0..4], .little)) {
+            1 => state.maximized = true,
+            2 => state.fullscreen = true,
+            3 => state.resizing = true,
+            4 => state.activated = true,
+            5 => state.tiled_left = true,
+            6 => state.tiled_right = true,
+            7 => state.tiled_top = true,
+            8 => state.tiled_bottom = true,
+            else => {},
+        }
+    }
+    return state;
+}
+
 /// Look up a Window by its frame_cb_id (wl_callback for frame pacing).
 fn findWindowByFrameCb(w: *Wayland, cb_id: u32) ?*window_mod.Window {
     for (w.surfaces.items) |*win| {
@@ -480,12 +520,20 @@ fn handleEvent(
                 win.configured = true;
                 win.pending_serial = cfg.serial;
 
+                sink(sink_ctx, .{ .window_configured = .{
+                    .surface = win.id,
+                    .width = win.width,
+                    .height = win.height,
+                    .decoration_mode = win.decoration_mode,
+                    .state = win.state,
+                } });
                 sink(sink_ctx, event_mod.Event{ .redraw_requested = win.id });
             }
         },
 
         .xdg_toplevel_configure => |cfg| {
             if (findWindowByXdgToplevel(w, ev.object_id)) |win| {
+                win.state = parseWindowState(cfg.states);
                 if (cfg.width > 0 and cfg.height > 0) {
                     win.width = @intCast(cfg.width);
                     win.height = @intCast(cfg.height);
@@ -496,6 +544,15 @@ fn handleEvent(
                     } });
                 }
                 // 0x0 means "you choose" - no event emitted.
+            }
+        },
+
+        .decoration_configure => |cfg| {
+            if (findWindowByDecoration(w, ev.object_id)) |win| {
+                win.decoration_mode = switch (cfg.mode) {
+                    @backingInt(deco.ZxdgToplevelDecorationV1.Mode.server_side) => .server_side,
+                    else => .client_side,
+                };
             }
         },
 
@@ -658,11 +715,21 @@ fn handleEvent(
             }
         },
 
+        .wl_pointer_leave => |e2| {
+            for (w.surfaces.items) |*win| {
+                if (win.wl_surface_id == e2.surface_obj and w.focus_surface == win.id) {
+                    w.focus_surface = null;
+                    w.button_press_count = 0;
+                }
+            }
+        },
+
         .wl_seat_capabilities => |cap| {
             // Publish the neutral seat state BEFORE the touch binding below, which
             // returns early when a request fails. A dropped state update would leave
             // seatCapabilities() reporting a seat the parent no longer has.
             const new_caps = input_mod.seatCapabilitiesFromMask(cap.caps);
+            if (!new_caps.pointer) w.button_press_count = 0;
             if (!new_caps.eql(w.seat_caps)) {
                 w.seat_caps = new_caps;
                 sink(sink_ctx, .{ .seat_capabilities = new_caps });
@@ -743,8 +810,22 @@ fn handleEvent(
             }
         },
 
+        .wl_pointer_button => |button| {
+            const surf = w.focus_surface orelse blk: {
+                if (w.surfaces.items.len > 0) break :blk w.surfaces.items[0].id;
+                return;
+            };
+            if (button.state == 1) {
+                w.recordButtonPress(surf, button.button, button.serial);
+            } else {
+                w.releaseButton(button.button);
+            }
+            if (input_mod.inputFromLogical(logical, surf)) |iev| {
+                sink(sink_ctx, .{ .input = iev });
+            }
+        },
+
         .wl_pointer_motion,
-        .wl_pointer_button,
         .wl_pointer_axis,
         .wl_touch_down,
         .wl_touch_up,
@@ -934,6 +1015,47 @@ test "classify xdg_toplevel.configure width/height" {
     try std.testing.expect(result == .xdg_toplevel_configure);
     try std.testing.expectEqual(@as(i32, 1280), result.xdg_toplevel_configure.width);
     try std.testing.expectEqual(@as(i32, 720), result.xdg_toplevel_configure.height);
+}
+
+test "classify xdg_toplevel.configure keeps window states" {
+    var states: [12]u8 = undefined;
+    std.mem.writeInt(u32, states[0..4], 1, .little);
+    std.mem.writeInt(u32, states[4..8], 4, .little);
+    std.mem.writeInt(u32, states[8..12], 7, .little);
+    const args = [_]wl.Argument{
+        .{ .int = 800 },
+        .{ .int = 600 },
+        .{ .array = &states },
+    };
+    const result = classify(&xdg.XdgToplevel.interface, @backingInt(xdg.XdgToplevel.EventOpcode.configure), &args);
+    const state = parseWindowState(result.xdg_toplevel_configure.states);
+    try std.testing.expect(state.maximized);
+    try std.testing.expect(state.activated);
+    try std.testing.expect(state.tiled_top);
+    try std.testing.expect(!state.fullscreen);
+}
+
+test "classify decoration.configure returns the effective mode" {
+    const args = [_]wl.Argument{.{ .uint = @backingInt(deco.ZxdgToplevelDecorationV1.Mode.server_side) }};
+    const result = classify(
+        &deco.ZxdgToplevelDecorationV1.interface,
+        @backingInt(deco.ZxdgToplevelDecorationV1.EventOpcode.configure),
+        &args,
+    );
+    try std.testing.expect(result == .decoration_configure);
+    try std.testing.expectEqual(@as(u32, 2), result.decoration_configure.mode);
+}
+
+test "classify pointer button keeps its press serial" {
+    const args = [_]wl.Argument{
+        .{ .uint = 73 },
+        .{ .uint = 1000 },
+        .{ .uint = 0x110 },
+        .{ .uint = 1 },
+    };
+    const result = classify(&wlp.WlPointer.interface, @backingInt(wlp.WlPointer.EventOpcode.button), &args);
+    try std.testing.expect(result == .wl_pointer_button);
+    try std.testing.expectEqual(@as(u32, 73), result.wl_pointer_button.serial);
 }
 
 test "classify xdg_toplevel.close" {

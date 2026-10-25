@@ -1,6 +1,7 @@
 const std = @import("std");
 const id = @import("id.zig");
 const color = @import("color.zig");
+const window_chrome = @import("window_chrome.zig");
 const prism = @import("prism");
 
 pub const RenderTarget = struct {
@@ -13,6 +14,8 @@ pub const RenderTarget = struct {
 
 pub const SurfaceDesc = struct {
     title: []const u8 = "",
+    app_id: []const u8 = "",
+    decoration_mode: window_chrome.DecorationMode = .server_side,
     width: u32 = 0,
     height: u32 = 0,
     color: color.ColorConfig,
@@ -38,5 +41,6 @@ test "surface exposes size and hdr" {
     };
     try std.testing.expectEqual([2]u32{ 1280, 720 }, s.size());
     try std.testing.expect(!s.isHdr());
+    try std.testing.expectEqual(window_chrome.DecorationMode.server_side, s.desc.decoration_mode);
     // RenderTarget now carries real prism pointers; no bare construction in tests.
 }

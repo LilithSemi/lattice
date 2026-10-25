@@ -5,8 +5,10 @@ const surface = @import("surface.zig");
 const output = @import("output.zig");
 const event = @import("event.zig");
 const text_input = @import("text_input.zig");
+const window_chrome = @import("window_chrome.zig");
 const backendMod = @import("backend.zig");
 const options_mod = @import("options.zig");
+const enabled = @import("backends_enabled.zig");
 const prism = @import("prism");
 
 pub const Handler = *const fn (ctx_data: *anyopaque, ev: event.Event) void;
@@ -43,7 +45,7 @@ pub const Context = struct {
         const kind = try options_mod.resolveBackend(opts, probe);
         switch (kind) {
             .wayland => {
-                if (comptime builtin.os.tag != .linux) return error.InvalidBackend;
+                if (comptime !enabled.client_wayland) return error.InvalidBackend;
                 const wayland_backend = @import("backend/wayland.zig");
                 var path_buf: [4096]u8 = undefined;
                 const wl = @import("wayland");
@@ -52,21 +54,25 @@ pub const Context = struct {
                 return initWithBackend(w.backend());
             },
             .kms => {
-                if (comptime builtin.os.tag != .linux) return error.InvalidBackend;
+                if (comptime !enabled.client_kms) return error.InvalidBackend;
                 const kms_backend = @import("backend/kms.zig");
                 const device_path = probe.kms_device orelse ""; // "" -> kms.init discovers via udev
                 const k = kms_backend.Kms.init(gpa, io, device_path, opts) catch |err| switch (err) {
                     // If we AUTO-selected kms but can't acquire the device (no seat, denied,
                     // or no card), fall back to headless instead of failing the whole app.
-                    error.NoSession, error.DeviceAccessDenied, error.NoDrmDevice => if (opts.backend == .auto) {
-                        const h = try @import("backend/headless.zig").Headless.init(gpa, io);
-                        return initWithBackend(h.backend());
-                    } else return err, // explicit .kms surfaces the error
+                    error.NoSession, error.DeviceAccessDenied, error.NoDrmDevice => if (comptime enabled.client_headless) {
+                        if (opts.backend == .auto) {
+                            const h = try @import("backend/headless.zig").Headless.init(gpa, io);
+                            return initWithBackend(h.backend());
+                        }
+                        return err;
+                    } else return err,
                     else => return err,
                 };
                 return initWithBackend(k.backend());
             },
             .headless => {
+                if (comptime !enabled.client_headless) return error.InvalidBackend;
                 const headless_backend = @import("backend/headless.zig");
                 const h = try headless_backend.Headless.init(gpa, io);
                 return initWithBackend(h.backend());
@@ -141,6 +147,55 @@ pub const Context = struct {
 
     pub fn setTextInput(self: *Context, s: id.SurfaceId, state: ?text_input.State) !void {
         try self.backend.setTextInput(s, state);
+    }
+
+    pub fn setTitle(self: *Context, s: id.SurfaceId, title: []const u8) !void {
+        try self.backend.windowCommand(s, .{ .set_title = title });
+    }
+
+    pub fn setAppId(self: *Context, s: id.SurfaceId, app_id: []const u8) !void {
+        try self.backend.windowCommand(s, .{ .set_app_id = app_id });
+    }
+
+    pub fn setDecorationMode(self: *Context, s: id.SurfaceId, mode: window_chrome.DecorationMode) !void {
+        try self.backend.windowCommand(s, .{ .set_decoration_mode = mode });
+    }
+
+    /// Start a compositor move with the current pointer press. Call this from
+    /// that press's event handler. A released or unfocused press returns
+    /// error.NoActivePointerPress.
+    pub fn beginMove(self: *Context, s: id.SurfaceId) !void {
+        try self.backend.windowCommand(s, .move);
+    }
+
+    /// Start a compositor resize with the current pointer press.
+    pub fn beginResize(self: *Context, s: id.SurfaceId, edge: window_chrome.ResizeEdge) !void {
+        try self.backend.windowCommand(s, .{ .resize = edge });
+    }
+
+    pub fn setMaximized(self: *Context, s: id.SurfaceId, maximized: bool) !void {
+        try self.backend.windowCommand(s, .{ .set_maximized = maximized });
+    }
+
+    pub fn minimize(self: *Context, s: id.SurfaceId) !void {
+        try self.backend.windowCommand(s, .minimize);
+    }
+
+    pub fn setFullscreen(self: *Context, s: id.SurfaceId, fullscreen: bool) !void {
+        try self.backend.windowCommand(s, .{ .set_fullscreen = fullscreen });
+    }
+
+    /// Show the compositor menu for the current pointer press.
+    pub fn showWindowMenu(self: *Context, s: id.SurfaceId, position: window_chrome.Position) !void {
+        try self.backend.windowCommand(s, .{ .show_window_menu = position });
+    }
+
+    pub fn setMinSize(self: *Context, s: id.SurfaceId, size: window_chrome.Size) !void {
+        try self.backend.windowCommand(s, .{ .set_min_size = size });
+    }
+
+    pub fn setMaxSize(self: *Context, s: id.SurfaceId, size: window_chrome.Size) !void {
+        try self.backend.windowCommand(s, .{ .set_max_size = size });
     }
 
     pub fn poll(self: *Context, timeout_ms: ?u32, handler: Handler, handler_ctx: *anyopaque) !void {

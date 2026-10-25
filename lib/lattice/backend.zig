@@ -5,6 +5,7 @@ const surface = @import("surface.zig");
 const output = @import("output.zig");
 const event = @import("event.zig");
 const text_input = @import("text_input.zig");
+const window_chrome = @import("window_chrome.zig");
 const prism = @import("prism");
 
 /// Coarse backend-wide capability hint. Per-output HDR truth lives in Output.hdr (HdrCaps);
@@ -12,6 +13,8 @@ const prism = @import("prism");
 pub const Capabilities = struct {
     hdr: bool,
     formats: []const color.PixelFormat,
+    /// The backend accepts window metadata and state commands.
+    window_chrome: bool = false,
 };
 
 /// A single axis-aligned rectangle used to bound a pointer constraint region.
@@ -60,6 +63,7 @@ pub const VTable = struct {
     /// Enable, update, or disable virtual-keyboard/IME input for a surface.
     /// Backends without an input-method integration may leave this null.
     setTextInput: ?*const fn (self: *anyopaque, surface: id.SurfaceId, state: ?text_input.State) anyerror!void = null,
+    windowCommand: ?*const fn (self: *anyopaque, surface: id.SurfaceId, command: window_chrome.Command) anyerror!void = null,
     deinit: *const fn (self: *anyopaque) void,
 };
 
@@ -109,6 +113,10 @@ pub const Backend = struct {
     pub fn setTextInput(self: Backend, s: id.SurfaceId, state: ?text_input.State) !void {
         const set = self.vtable.setTextInput orelse return error.Unsupported;
         try set(self.ptr, s, state);
+    }
+    pub fn windowCommand(self: Backend, s: id.SurfaceId, command: window_chrome.Command) !void {
+        const send = self.vtable.windowCommand orelse return error.Unsupported;
+        try send(self.ptr, s, command);
     }
     pub fn deinit(self: Backend) void {
         self.vtable.deinit(self.ptr);
@@ -202,6 +210,7 @@ test "backend forwards calls to a trivial vtable impl" {
     try std.testing.expectEqual(true, seat.pointer);
     try std.testing.expectEqual(false, seat.keyboard);
     try std.testing.expectEqual(true, seat.touch);
+    try std.testing.expectError(error.Unsupported, b.windowCommand(s.id, .minimize));
 }
 
 test "applyPointerConstraint is callable on a backend (no-op default)" {

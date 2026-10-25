@@ -1,6 +1,7 @@
 const std = @import("std");
 const id = @import("id.zig");
 const text_input = @import("text_input.zig");
+const window_chrome = @import("window_chrome.zig");
 
 pub const KeyState = enum { pressed, released };
 pub const ButtonState = enum { pressed, released };
@@ -86,6 +87,7 @@ pub const SeatCapabilities = struct {
 pub const Event = union(enum) {
     resized: Resized,
     scale_changed: ScaleChanged,
+    window_configured: window_chrome.Configure,
     close_requested: id.SurfaceId,
     redraw_requested: id.SurfaceId,
     output_added: id.OutputId,
@@ -136,6 +138,20 @@ test "Event carries session activation" {
     try std.testing.expect(a == .session_inactive);
     const b: Event = .session_active;
     try std.testing.expect(b == .session_active);
+}
+
+test "Event carries configured window chrome state" {
+    const e = Event{ .window_configured = .{
+        .surface = id.SurfaceId.from(3),
+        .width = 800,
+        .height = 600,
+        .decoration_mode = .client_side,
+        .state = .{ .maximized = true, .tiled_left = true },
+    } };
+    try std.testing.expect(e == .window_configured);
+    try std.testing.expect(e.window_configured.state.maximized);
+    try std.testing.expect(e.window_configured.state.tiled_left);
+    try std.testing.expectEqual(window_chrome.DecorationMode.client_side, e.window_configured.decoration_mode);
 }
 
 test "InputEvent carries seat-global relative motion" {

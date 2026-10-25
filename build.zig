@@ -7,10 +7,35 @@ pub fn build(b: *std.Build) void {
 
     const gpu_drivers = b.option([]const u8, "gpu-drivers", "Specific GPU drivers to enable, defaults to Prism's choice.");
 
+    const on_linux = target.result.os.tag == .linux;
+    const known_client = [_][]const u8{ "wayland", "kms", "headless" };
+    const known_compositor = [_][]const u8{"wayland"};
+    const client_opt = b.option([]const u8, "client-backends", "Comma-separated client backends to compile in, defaults to all that apply to the target.");
+    const compositor_opt = b.option([]const u8, "compositor-backends", "Comma-separated compositor backends to compile in, defaults to all that apply to the target.");
+    const client_set = parseBackendList(b, client_opt, &known_client, "client-backends");
+    const compositor_set = parseBackendList(b, compositor_opt, &known_compositor, "compositor-backends");
+    const client_wayland = client_set.contains("wayland") and on_linux;
+    const client_kms = client_set.contains("kms") and on_linux;
+    const client_headless = client_set.contains("headless");
+    const compositor_wayland = compositor_set.contains("wayland");
+
+    if (!(client_wayland or client_kms or client_headless)) {
+        std.debug.panic("no client backend applies to {s}: a build with none cannot construct a Context", .{@tagName(target.result.os.tag)});
+    }
+
+    const backend_options = b.addOptions();
+    backend_options.addOption(bool, "client_wayland", client_wayland);
+    backend_options.addOption(bool, "client_kms", client_kms);
+    backend_options.addOption(bool, "client_headless", client_headless);
+    backend_options.addOption(bool, "compositor_wayland", compositor_wayland);
+
     const root_module = b.addModule("lattice", .{
         .root_source_file = b.path("lib/lattice.zig"),
         .target = target,
         .optimize = optimize,
+        .imports = &.{
+            .{ .name = "build-options", .module = backend_options.createModule() },
+        },
     });
 
     const wayland_dep = b.dependency("wayland", .{
@@ -60,6 +85,7 @@ pub fn build(b: *std.Build) void {
     const relative_pointer_proto = wayland_build.generateProtocol(b, wayland_dep, wl_protocols.path("unstable/relative-pointer/relative-pointer-unstable-v1.xml"), "relative_pointer");
     const pointer_constraints_proto = wayland_build.generateProtocol(b, wayland_dep, wl_protocols.path("unstable/pointer-constraints/pointer-constraints-unstable-v1.xml"), "pointer_constraints");
     const tablet_v2_proto = wayland_build.generateProtocol(b, wayland_dep, wl_protocols.path("unstable/tablet/tablet-unstable-v2.xml"), "tablet_v2");
+    const xdg_decoration_proto = wayland_build.generateProtocol(b, wayland_dep, wl_protocols.path("unstable/xdg-decoration/xdg-decoration-unstable-v1.xml"), "xdg_decoration");
 
     root_module.addImport("wayland", wayland_mod);
     root_module.addImport("wayland_protocol", wl_proto);
@@ -69,6 +95,7 @@ pub fn build(b: *std.Build) void {
     root_module.addImport("relative_pointer", relative_pointer_proto);
     root_module.addImport("pointer_constraints", pointer_constraints_proto);
     root_module.addImport("tablet_v2", tablet_v2_proto);
+    root_module.addImport("xdg_decoration", xdg_decoration_proto);
     root_module.addImport("prism", prism_dep.module("prism"));
     root_module.addImport("xkbcommon", xkbcommon_dep.module("xkbcommon"));
     root_module.addImport("drm", drm_dep.module("drm"));
@@ -166,4 +193,30 @@ pub fn build(b: *std.Build) void {
     const run_tests = b.addRunArtifact(tests);
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_tests.step);
+}
+
+fn parseBackendList(
+    b: *std.Build,
+    opt: ?[]const u8,
+    known: []const []const u8,
+    flag: []const u8,
+) std.StringHashMap(void) {
+    var set = std.StringHashMap(void).init(b.allocator);
+    const list = opt orelse {
+        for (known) |name| set.put(name, {}) catch @panic("OOM");
+        return set;
+    };
+    var it = std.mem.splitScalar(u8, list, ',');
+    while (it.next()) |raw| {
+        const name = std.mem.trim(u8, raw, " ");
+        if (name.len == 0) continue;
+        var known_name = false;
+        for (known) |candidate| {
+            if (std.mem.eql(u8, candidate, name)) known_name = true;
+        }
+        if (!known_name) std.debug.panic("unknown {s} value: {s}", .{ flag, name });
+        set.put(name, {}) catch @panic("OOM");
+    }
+    if (set.count() == 0) std.debug.panic("{s} was given an empty list", .{flag});
+    return set;
 }
