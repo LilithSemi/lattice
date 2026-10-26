@@ -62,6 +62,7 @@
               zig_0_17
               pkg-config
               vulkan-loader
+              git
             ];
           };
         }
