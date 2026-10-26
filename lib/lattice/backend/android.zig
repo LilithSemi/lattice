@@ -264,7 +264,7 @@ pub const Android = struct {
             .target = entry.target orelse return error.SurfaceUnavailable,
             .width = entry.width,
             .height = entry.height,
-            .format = .xrgb8888,
+            .format = entry.value.desc.color.format,
         };
     }
 
@@ -287,7 +287,7 @@ pub const Android = struct {
     }
 
     fn capabilities(_: *anyopaque) backend_mod.Capabilities {
-        return .{ .hdr = false, .formats = &.{.xrgb8888} };
+        return .{ .hdr = false, .formats = &.{ .xrgb8888, .argb8888 } };
     }
 
     fn seatCapabilities(_: *anyopaque) event.SeatCapabilities {
