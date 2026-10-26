@@ -119,7 +119,10 @@ const App = struct {
                         self.comp.pointerAxis(a.horizontal, a.vertical);
                     },
                     .key => |k| {
-                        self.comp.key(k.keycode, k.state == .pressed);
+                        // key() returns whether a focused hosted client received the
+                        // event. This forwarder has no local use for that result,
+                        // so discard it (same as the synthetic input below).
+                        _ = self.comp.key(k.keycode, k.state == .pressed);
                     },
                     .tablet_proximity => |t| {
                         self.comp.tabletProximity(t.in_prox);
@@ -164,6 +167,20 @@ const App = struct {
             .surface_unmapped => |id| {
                 std.debug.print("[nested] surface unmapped id={d}\n", .{id.value()});
                 self.removeSurface(id);
+            },
+            // Window-chrome request events. The demo tiles surfaces at fixed
+            // positions, so there is no layout to drive: log and ignore.
+            .surface_move_requested => |id| {
+                std.debug.print("[nested] move requested id={d} (ignored; demo tiles fixed)\n", .{id.value()});
+            },
+            .surface_resize_requested => |req| {
+                std.debug.print("[nested] resize requested id={d} edge={d} (ignored; demo tiles fixed)\n", .{ req.id.value(), @backingInt(req.edge) });
+            },
+            .surface_maximize_requested => |req| {
+                std.debug.print("[nested] maximize requested id={d} maximized={} (ignored; demo tiles fixed)\n", .{ req.id.value(), req.maximized });
+            },
+            .surface_fullscreen_requested => |req| {
+                std.debug.print("[nested] fullscreen requested id={d} fullscreen={} (ignored; demo tiles fixed)\n", .{ req.id.value(), req.fullscreen });
             },
             .client_disconnected => |id| {
                 std.debug.print("[nested] client disconnected id={d}\n", .{id.value()});
