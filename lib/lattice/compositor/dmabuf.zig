@@ -40,6 +40,8 @@ pub const FormatTableEntry = extern struct {
 /// mapping is a cached mmap slice (munmapped on buffer destroy), set lazily on commit.
 pub const DmabufClientBuffer = struct {
     fd: std.posix.fd_t,
+    /// Byte offset of plane 0 within the dma-buf allocation.
+    offset: u32 = 0,
     width: u32,
     height: u32,
     stride: u32,
@@ -47,6 +49,24 @@ pub const DmabufClientBuffer = struct {
     modifier: u64,
     mapping: ?[]align(std.heap.page_size_min) u8 = null,
 };
+
+// dma-buf CPU access synchronization from linux/dma-buf.h. Importing a GPU
+// producer's linear buffer through mmap without these ioctls can expose stale
+// cache lines or an incompletely rendered frame, which appears as colored
+// noise on coherent-looking but non-coherent devices.
+const DMA_BUF_IOCTL_SYNC: u32 = 0x40086200; // _IOW('b', 0, u64)
+const DMA_BUF_SYNC_READ: u64 = 1;
+const DMA_BUF_SYNC_END: u64 = 4;
+
+pub fn beginCpuRead(fd: posix.fd_t) void {
+    var flags: u64 = DMA_BUF_SYNC_READ;
+    _ = linux.ioctl(fd, DMA_BUF_IOCTL_SYNC, @intFromPtr(&flags));
+}
+
+pub fn endCpuRead(fd: posix.fd_t) void {
+    var flags: u64 = DMA_BUF_SYNC_READ | DMA_BUF_SYNC_END;
+    _ = linux.ioctl(fd, DMA_BUF_IOCTL_SYNC, @intFromPtr(&flags));
+}
 
 /// Accumulates planes sent by the client via zwp_linux_buffer_params_v1.add()
 /// before a create or create_immed request finalises the buffer.
@@ -192,18 +212,12 @@ fn onParamsDestroy(res: *Object) void {
 // TASK 2: format-table memfd builder + render-node device id
 // ---------------------------------------------------------------------------
 
-/// Build a format-table memfd containing five FormatTableEntry values:
-///   ARGB8888/LINEAR, XRGB8888/LINEAR, ABGR16161616F/LINEAR (HDR fp16),
-///   ABGR2101010/LINEAR (10-bit HDR rgb10a2), XBGR2101010/LINEAR (10-bit HDR rgb10x2).
-/// Returns the fd (caller closes after sendFormatTable) and the byte size (80).
+/// Build a format-table memfd containing the two validated SDR linear formats.
 fn buildFormatTable(gpa: std.mem.Allocator) !struct { fd: posix.fd_t, size: u32 } {
     _ = gpa;
-    const entries = [5]FormatTableEntry{
+    const entries = [2]FormatTableEntry{
         .{ .format = 0x34325241, .modifier = 0 }, // ARGB8888, LINEAR
         .{ .format = 0x34325258, .modifier = 0 }, // XRGB8888, LINEAR
-        .{ .format = 0x48344241, .modifier = 0 }, // ABGR16161616F (HDR fp16), LINEAR
-        .{ .format = 0x30334241, .modifier = 0 }, // ABGR2101010 (10-bit HDR rgb10a2), LINEAR
-        .{ .format = 0x30334258, .modifier = 0 }, // XBGR2101010 (10-bit HDR rgb10x2), LINEAR
     };
     const size: u32 = @intCast(@sizeOf(@TypeOf(entries)));
 
@@ -280,7 +294,7 @@ fn onGetDefaultFeedback(client_data: ?*anyopaque, resource: *Object, id: u32) vo
     ld.ZwpLinuxDmabufFeedbackV1.sendMainDevice(fb_res, dev_bytes);
     ld.ZwpLinuxDmabufFeedbackV1.sendTrancheTargetDevice(fb_res, dev_bytes);
 
-    const indices = [_]u16{ 0, 1, 2, 3, 4 };
+    const indices = [_]u16{ 0, 1 };
     ld.ZwpLinuxDmabufFeedbackV1.sendTrancheFormats(fb_res, std.mem.sliceAsBytes(indices[0..]));
     ld.ZwpLinuxDmabufFeedbackV1.sendTrancheFlags(fb_res, 0);
     ld.ZwpLinuxDmabufFeedbackV1.sendTrancheDone(fb_res);
@@ -292,13 +306,9 @@ fn onGetDefaultFeedback(client_data: ?*anyopaque, resource: *Object, id: u32) vo
 // ---------------------------------------------------------------------------
 
 /// Returns true only for the formats + LINEAR modifier we accept.
-/// ARGB8888 = 0x34325241, XRGB8888 = 0x34325258,
-/// ABGR16161616F (HDR fp16) = 0x48344241,
-/// ABGR2101010 (10-bit HDR rgb10a2) = 0x30334241,
-/// XBGR2101010 (10-bit HDR rgb10x2) = 0x30334258, LINEAR modifier = 0.
+/// ARGB8888 = 0x34325241 and XRGB8888 = 0x34325258, LINEAR modifier = 0.
 pub fn isSupportedFormat(fourcc: u32, modifier: u64) bool {
-    return (fourcc == 0x34325241 or fourcc == 0x34325258 or fourcc == 0x48344241 or
-        fourcc == 0x30334241 or fourcc == 0x30334258) and modifier == 0;
+    return (fourcc == 0x34325241 or fourcc == 0x34325258) and modifier == 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -393,6 +403,7 @@ fn commitParams(
 
     const dbuf = DmabufClientBuffer{
         .fd = plane0.fd,
+        .offset = plane0.offset,
         .width = @intCast(width),
         .height = @intCast(height),
         .stride = plane0.stride,
@@ -505,7 +516,7 @@ test "isSupportedFormat: ARGB8888 + LINEAR -> true" {
     const testing = std.testing;
     try testing.expect(isSupportedFormat(0x34325241, 0)); // ARGB8888, LINEAR
     try testing.expect(isSupportedFormat(0x34325258, 0)); // XRGB8888, LINEAR
-    try testing.expect(isSupportedFormat(0x48344241, 0)); // ABGR16161616F (HDR fp16), LINEAR
+    try testing.expect(!isSupportedFormat(0x48344241, 0)); // HDR path not validated yet
     try testing.expect(!isSupportedFormat(0x48344241, 1)); // ABGR16161616F, non-LINEAR
     try testing.expect(!isSupportedFormat(0x34325241, 1)); // ARGB8888, non-LINEAR
     try testing.expect(!isSupportedFormat(0x34325258, 0xDEADBEEF00000000)); // nonzero modifier

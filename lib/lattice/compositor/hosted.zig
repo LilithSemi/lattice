@@ -105,8 +105,8 @@ pub fn uploadToTexture(
 
     // Destroy and recreate the texture if size OR format changed, or not yet created.
     const needs_recreate = entry.surface.texture == null or
-        entry.surface.width != width or
-        entry.surface.height != height or
+        entry.texture_width != width or
+        entry.texture_height != height or
         entry.surface.tex_format != pfmt;
 
     if (needs_recreate) {
@@ -123,8 +123,8 @@ pub fn uploadToTexture(
             },
         });
         entry.surface.texture = new_tex;
-        entry.surface.width = width;
-        entry.surface.height = height;
+        entry.texture_width = width;
+        entry.texture_height = height;
         entry.surface.tex_format = pfmt;
     }
 
@@ -166,6 +166,25 @@ pub const ClientId = enum(u32) {
 /// Role of a hosted surface in the xdg-shell protocol
 pub const Role = enum { none, toplevel, popup };
 
+/// xdg_toplevel resize edges, kept wire-compatible with the protocol.
+pub const ResizeEdge = enum(u32) {
+    top = 1,
+    bottom = 2,
+    left = 4,
+    top_left = 5,
+    bottom_left = 6,
+    right = 8,
+    top_right = 9,
+    bottom_right = 10,
+};
+
+pub const ToplevelState = packed struct {
+    maximized: bool = false,
+    fullscreen: bool = false,
+    resizing: bool = false,
+    activated: bool = false,
+};
+
 /// Neutral representation of a surface hosted by the compositor.
 /// Contains metadata and the composited texture. No wayland.zig wire types cross this boundary.
 pub const HostedSurface = struct {
@@ -176,6 +195,16 @@ pub const HostedSurface = struct {
     app_id: []const u8 = "",
     width: u32 = 0,
     height: u32 = 0,
+    /// Subsurface relationship and position, when this is not a root surface.
+    parent: ?HostedSurfaceId = null,
+    offset_x: i32 = 0,
+    offset_y: i32 = 0,
+    above_parent: bool = true,
+    /// Normalized crop rectangle selected by wp_viewport.
+    uv_x: f32 = 0,
+    uv_y: f32 = 0,
+    uv_width: f32 = 1,
+    uv_height: f32 = 1,
     texture: ?*prism.Resource = null,
     /// The prism format the cached `texture` was created with. Tracked so the
     /// upload path recreates the texture when the client buffer's pixel format
@@ -207,6 +236,14 @@ pub const CompositorEvent = union(enum) {
     },
     /// A surface has been unmapped.
     surface_unmapped: HostedSurfaceId,
+    /// The client began an xdg_toplevel interactive move grab.
+    surface_move_requested: HostedSurfaceId,
+    /// The client began an xdg_toplevel interactive resize grab.
+    surface_resize_requested: struct { id: HostedSurfaceId, edge: ResizeEdge },
+    /// The client requested a maximize state transition.
+    surface_maximize_requested: struct { id: HostedSurfaceId, maximized: bool },
+    /// The client requested a fullscreen state transition.
+    surface_fullscreen_requested: struct { id: HostedSurfaceId, fullscreen: bool },
     /// A client has disconnected.
     client_disconnected: ClientId,
     /// A pointer constraint was activated or deactivated on a focused surface.

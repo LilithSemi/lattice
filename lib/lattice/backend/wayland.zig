@@ -1250,12 +1250,13 @@ pub const Wayland = struct {
         try wlp.WlSurface.damageBuffer(w, gpa, win.wl_surface_id, 0, 0, @intCast(width), @intCast(height));
         try self.conn.sendMessage(w.finish());
 
-        if (win.frame_cb_id) |old| self.imap.remove(old);
-        const cb_id = self.conn.objects.allocId();
-        try self.imap.set(cb_id, &wlp.WlCallback.interface);
-        try wlp.WlSurface.frame(w, gpa, win.wl_surface_id, cb_id);
-        try self.conn.sendMessage(w.finish());
-        win.frame_cb_id = cb_id;
+        if (win.frame_cb_id == null) {
+            const cb_id = self.conn.objects.allocId();
+            try self.imap.set(cb_id, &wlp.WlCallback.interface);
+            try wlp.WlSurface.frame(w, gpa, win.wl_surface_id, cb_id);
+            try self.conn.sendMessage(w.finish());
+            win.frame_cb_id = cb_id;
+        }
 
         try wlp.WlSurface.commit(w, gpa, win.wl_surface_id);
         try self.conn.sendMessage(w.finish());
@@ -1291,12 +1292,13 @@ pub const Wayland = struct {
             try wlp.WlSurface.damageBuffer(w, gpa, win.wl_surface_id, 0, 0, @intCast(width), @intCast(height));
             try self.conn.sendMessage(w.finish());
 
-            if (win.frame_cb_id) |old| self.imap.remove(old);
-            const cb_id = self.conn.objects.allocId();
-            try self.imap.set(cb_id, &wlp.WlCallback.interface);
-            try wlp.WlSurface.frame(w, gpa, win.wl_surface_id, cb_id);
-            try self.conn.sendMessage(w.finish());
-            win.frame_cb_id = cb_id;
+            if (win.frame_cb_id == null) {
+                const cb_id = self.conn.objects.allocId();
+                try self.imap.set(cb_id, &wlp.WlCallback.interface);
+                try wlp.WlSurface.frame(w, gpa, win.wl_surface_id, cb_id);
+                try self.conn.sendMessage(w.finish());
+                win.frame_cb_id = cb_id;
+            }
 
             try wlp.WlSurface.commit(w, gpa, win.wl_surface_id);
             try self.conn.sendMessage(w.finish());
@@ -1342,14 +1344,16 @@ pub const Wayland = struct {
         try wlp.WlSurface.damageBuffer(w, gpa, win.wl_surface_id, 0, 0, @intCast(width), @intCast(height));
         try self.conn.sendMessage(w.finish());
 
-        // Request a fresh frame callback for pacing.
-        // Guard against stale frame_cb_id if commitFrame called twice before callback fires.
-        if (win.frame_cb_id) |old| self.imap.remove(old);
-        const cb_id = self.conn.objects.allocId();
-        try self.imap.set(cb_id, &wlp.WlCallback.interface);
-        try wlp.WlSurface.frame(w, gpa, win.wl_surface_id, cb_id);
-        try self.conn.sendMessage(w.finish());
-        win.frame_cb_id = cb_id;
+        // Keep at most one scheduling hint outstanding. Buffer release is the
+        // actual backpressure, so another free buffer may still be committed
+        // while a delayed parent frame callback is pending.
+        if (win.frame_cb_id == null) {
+            const cb_id = self.conn.objects.allocId();
+            try self.imap.set(cb_id, &wlp.WlCallback.interface);
+            try wlp.WlSurface.frame(w, gpa, win.wl_surface_id, cb_id);
+            try self.conn.sendMessage(w.finish());
+            win.frame_cb_id = cb_id;
+        }
 
         try wlp.WlSurface.commit(w, gpa, win.wl_surface_id);
         try self.conn.sendMessage(w.finish());
@@ -1391,11 +1395,7 @@ pub const Wayland = struct {
             },
         };
 
-        return window_mod.canRender(
-            win.configured,
-            any_free,
-            win.frame_cb_id != null,
-        );
+        return window_mod.canRender(win.configured, any_free);
     }
 
     fn pump(ptr: *anyopaque, timeout_ms: ?u32, sink: lattice_backend.EventSink, sink_ctx: *anyopaque) anyerror!void {

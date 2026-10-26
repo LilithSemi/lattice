@@ -15,6 +15,7 @@
 const std = @import("std");
 const wl = @import("wayland");
 const wlp = @import("wayland_protocol");
+const xdg = @import("xdg_shell");
 const prism = @import("prism");
 
 const globals = @import("compositor/globals.zig");
@@ -24,8 +25,11 @@ const surface_state = @import("compositor/surface_state.zig");
 const draw_mod = @import("compositor/draw.zig");
 const seat_mod = @import("compositor/seat.zig");
 const dmabuf_mod = @import("compositor/dmabuf.zig");
+const fractional_scale_mod = @import("compositor/fractional_scale.zig");
 const constraints_mod = @import("compositor/constraints.zig");
 const tablet_mod = @import("compositor/tablet_input.zig");
+const viewporter_mod = @import("compositor/viewporter.zig");
+const subcompositor_mod = @import("compositor/subcompositor.zig");
 pub const color_manager = @import("compositor/color_manager.zig");
 
 const ColorMgr = color_manager.ColorManager(@import("color_management"));
@@ -37,23 +41,20 @@ pub const BufferRef = surface_state.BufferRef;
 
 const Shm = wl.shm.Shm(wlp);
 
-/// wl_shm formats the nested compositor advertises + accepts. In addition to
-/// the mandatory ARGB8888 (0) and XRGB8888 (1), we advertise the HDR RGBA fp16
-/// format ABGR16161616F (0x48344241). wl_shm sends non-ARGB/XRGB formats as
-/// their raw DRM fourcc, so a conforming client uses that fourcc + stride=w*8;
-/// wl.shm.Shm gates create_buffer on this list and carries the fourcc through
-/// to Buffer.format -> onSurfaceCommit -> uploadToTexture (which maps it to
-/// prism rgba16_float). Keeping ARGB/XRGB first leaves the SDR path unchanged.
+/// wl_shm formats the nested compositor advertises + accepts. Keep this to the
+/// mandatory, proven 8-bit formats until Prism's packed 10-bit and fp16 sampled
+/// texture paths are validated end-to-end. Advertising those formats makes
+/// clients such as mpv legitimately select them, which is worse than omitting
+/// an optional format when the resulting image is not yet correct.
 const shm_formats = [_]u32{
     wl.shm.FORMAT_ARGB8888,
     wl.shm.FORMAT_XRGB8888,
-    0x48344241, // DRM_FORMAT_ABGR16161616F (RGBA fp16)
-    0x30334241, // DRM_FORMAT_ABGR2101010 (10-bit HDR10 rgb10a2)
-    0x30334258, // DRM_FORMAT_XBGR2101010 (10-bit HDR10 rgb10x2) - parity with the dmabuf table
 };
 
 pub const HostedSurface = hosted.HostedSurface;
 pub const HostedSurfaceId = hosted.HostedSurfaceId;
+pub const ResizeEdge = hosted.ResizeEdge;
+pub const ToplevelState = hosted.ToplevelState;
 pub const Client = hosted.Client;
 pub const ClientId = hosted.ClientId;
 pub const CompositorEvent = hosted.CompositorEvent;
@@ -72,11 +73,41 @@ pub const Options = struct {
     /// Passed explicitly since std.posix.getenv is unavailable in Zig 0.16;
     /// the caller derives it from the environment (XKB_CONFIG_ROOT).
     xkb_config_root: ?[]const u8 = null,
+    /// Advertise linux-dmabuf to hosted clients. Disabled by default until the
+    /// compositor imports dma-bufs through the GPU rather than CPU-mapping them;
+    /// wl_shm is the correctness path for general clients such as mpv.
+    enable_dmabuf: bool = false,
+};
+
+/// A wl_resource may be destroyed by its client before the compositor reaches
+/// the end-of-frame release point. Keeping a raw `*Object` across that boundary
+/// therefore leaves a dangling pointer. Retain the identity without
+/// dereferencing it, then resolve it through the client's live object map.
+const ResourceRef = struct {
+    client: *wl.server_client.Client,
+    id: u32,
+    address: usize,
+
+    pub fn init(resource: *wl.Object) ResourceRef {
+        return .{
+            .client = resource.client,
+            .id = resource.id,
+            .address = @intFromPtr(resource),
+        };
+    }
+
+    fn resolve(self: ResourceRef) ?*wl.Object {
+        const resource = self.client.getObject(self.id) orelse return null;
+        return if (@intFromPtr(resource) == self.address) resource else null;
+    }
 };
 
 /// Per-wl_surface entry: tracks the protocol object, double-buffer state, and
 /// the last committed pixel dimensions for Task 7 texture upload.
 pub const HostedEntry = struct {
+    pub const ViewportSource = struct { x: f64, y: f64, width: f64, height: f64 };
+    pub const ViewportDestination = struct { width: u32, height: u32 };
+
     /// The wayland object id of the wl_surface resource.
     object_id: u32,
     /// The wl_surface resource Object pointer.
@@ -87,6 +118,19 @@ pub const HostedEntry = struct {
     pending_buffer_res: ?*wl.Object = null,
     /// Frame callback resource (null until a frame request arrives).
     frame_callback_res: ?*wl.Object = null,
+    /// Optional wp_viewport associated with this surface.
+    viewport_res: ?*wl.Object = null,
+    /// Optional wp_fractional_scale_v1 associated with this surface.
+    fractional_scale_res: ?*wl.Object = null,
+    viewport_pending_source: ?ViewportSource = null,
+    viewport_current_source: ?ViewportSource = null,
+    viewport_pending_destination: ?ViewportDestination = null,
+    viewport_current_destination: ?ViewportDestination = null,
+    subsurface_res: ?*wl.Object = null,
+    subsurface_sync: bool = true,
+    /// The sampled texture dimensions are distinct from wp_viewport's logical size.
+    texture_width: u32 = 0,
+    texture_height: u32 = 0,
 
     // xdg-shell resources (Task 6).
     /// The xdg_surface resource Object pointer (null until get_xdg_surface).
@@ -116,12 +160,12 @@ pub const HostedEntry = struct {
     /// The wl_buffer resource that was committed on this frame (null if no new commit).
     /// Set in onSurfaceCommit, released + nulled in endFrame. Distinct from
     /// pending_buffer_res (the attach-staging pointer) so endFrame never double-releases.
-    committed_buffer_res: ?*wl.Object = null,
+    committed_buffer_res: ?ResourceRef = null,
 
     /// The dma-buf wl_buffer resource committed on this frame (null if not a dmabuf commit).
     /// Released via wlp.WlBuffer.sendRelease in endFrame (not Shm.releaseBuffer).
     /// Exactly one of committed_buffer_res and committed_dmabuf_res is non-null per frame.
-    committed_dmabuf_res: ?*wl.Object = null,
+    committed_dmabuf_res: ?ResourceRef = null,
 
     /// Set to true after a successful texture upload on commit; Task 10 drains this.
     needs_committed_event: bool = false,
@@ -131,6 +175,13 @@ pub const HostedEntry = struct {
     needs_resized_event: bool = false,
     /// Set to true when a surface becomes unmapped (buffer_cleared or role destroyed).
     needs_unmapped_event: bool = false,
+    /// Set by xdg_toplevel.move and drained to the embedding shell.
+    needs_move_event: bool = false,
+    /// Set by xdg_toplevel.resize and drained to the embedding shell.
+    pending_resize_edge: ?ResizeEdge = null,
+    /// State transitions requested by the client and drained to the shell.
+    pending_maximized: ?bool = null,
+    pending_fullscreen: ?bool = null,
 
     /// Set to true once we have logged the first HDR color transition for this surface.
     hdr_logged: bool = false,
@@ -141,6 +192,48 @@ pub const HostedEntry = struct {
 
     /// The neutral hosted surface metadata (shared with shell consumers).
     surface: HostedSurface,
+
+    pub fn commitViewport(self: *HostedEntry) void {
+        self.viewport_current_source = self.viewport_pending_source;
+        self.viewport_current_destination = self.viewport_pending_destination;
+        if (self.viewport_current_source) |src| {
+            const tw = @max(1, self.texture_width);
+            const th = @max(1, self.texture_height);
+            self.surface.uv_x = @floatCast(src.x / @as(f64, @floatFromInt(tw)));
+            self.surface.uv_y = @floatCast(src.y / @as(f64, @floatFromInt(th)));
+            self.surface.uv_width = @floatCast(src.width / @as(f64, @floatFromInt(tw)));
+            self.surface.uv_height = @floatCast(src.height / @as(f64, @floatFromInt(th)));
+        } else {
+            self.surface.uv_x = 0;
+            self.surface.uv_y = 0;
+            self.surface.uv_width = 1;
+            self.surface.uv_height = 1;
+        }
+        if (self.viewport_current_destination) |dst| {
+            self.surface.width = dst.width;
+            self.surface.height = dst.height;
+        } else if (self.viewport_current_source) |src| {
+            self.surface.width = @intFromFloat(src.width);
+            self.surface.height = @intFromFloat(src.height);
+        } else {
+            self.surface.width = self.texture_width;
+            self.surface.height = self.texture_height;
+        }
+    }
+
+    pub fn clearViewport(self: *HostedEntry) void {
+        self.viewport_res = null;
+        self.viewport_pending_source = null;
+        self.viewport_pending_destination = null;
+    }
+
+    pub fn clearSubsurface(self: *HostedEntry) void {
+        self.subsurface_res = null;
+        self.surface.parent = null;
+        self.surface.offset_x = 0;
+        self.surface.offset_y = 0;
+        self.surface.above_parent = true;
+    }
 };
 
 /// Composite surface key: object ids are only unique PER CLIENT, so a bare
@@ -214,6 +307,11 @@ pub const Compositor = struct {
     // Lives inline in Compositor (heap-allocated), so &tablet_ctx is stable.
     tablet_ctx: tablet_mod.TabletCtx,
 
+    // Stable wp_viewporter implementation context.
+    viewporter_ctx: viewporter_mod.Ctx,
+    fractional_scale_ctx: fractional_scale_mod.Ctx,
+    subcompositor_ctx: subcompositor_mod.Ctx,
+
     // Cursor state: current pointer position in render-target pixel space.
     // Updated by pointerMotion; read by drawCursor.
     cursor_x: f64 = 0,
@@ -256,6 +354,9 @@ pub const Compositor = struct {
             .dmabuf_ctx = dmabuf_mod.makeDmabufCtx(),
             .constraints_ctx = constraints_mod.makeConstraintsCtx(),
             .tablet_ctx = tablet_mod.makeTabletCtx(),
+            .viewporter_ctx = viewporter_mod.makeCtx(),
+            .fractional_scale_ctx = fractional_scale_mod.makeCtx(),
+            .subcompositor_ctx = subcompositor_mod.makeCtx(),
         };
 
         // Wire the back-pointer so GlobalsCtx handlers can reach this Compositor.
@@ -283,6 +384,11 @@ pub const Compositor = struct {
         // Wire the back-pointer for TabletCtx.
         self.tablet_ctx.compositor = @ptrCast(self);
 
+        // Wire the back-pointer for wp_viewporter.
+        self.viewporter_ctx.compositor = @ptrCast(self);
+        self.fractional_scale_ctx.compositor = @ptrCast(self);
+        self.subcompositor_ctx.compositor = @ptrCast(self);
+
         self.display = try wl.Display.create(gpa);
         errdefer self.display.destroy();
 
@@ -298,11 +404,15 @@ pub const Compositor = struct {
             &self.seat_ctx,
         );
 
-        try dmabuf_mod.registerDmabufGlobal(self.display, &self.dmabuf_ctx);
+        if (opts.enable_dmabuf) try dmabuf_mod.registerDmabufGlobal(self.display, &self.dmabuf_ctx);
 
         try constraints_mod.registerConstraintGlobals(self.display, &self.constraints_ctx);
 
         try tablet_mod.registerTabletGlobals(self.display, &self.tablet_ctx);
+
+        try viewporter_mod.registerGlobal(self.display, &self.viewporter_ctx);
+        try fractional_scale_mod.registerGlobal(self.display, &self.fractional_scale_ctx);
+        try subcompositor_mod.registerGlobal(self.display, &self.subcompositor_ctx);
 
         self.color_mgr = try ColorMgr.create(self.display, .{});
 
@@ -732,6 +842,48 @@ pub const Compositor = struct {
         seat_mod.routeFocus(&self.seat_ctx, self, surface);
     }
 
+    /// Configure a hosted toplevel to a compositor-selected size and state.
+    /// Width/height are surface-local logical pixels; zero lets the client pick.
+    pub fn configureToplevel(
+        self: *Compositor,
+        surface: HostedSurfaceId,
+        width: u32,
+        height: u32,
+        state: ToplevelState,
+    ) void {
+        const entry = self.findSurfaceById(surface) orelse return;
+        const toplevel = entry.xdg_toplevel_res orelse return;
+        const xdg_surface = entry.xdg_surface_res orelse return;
+
+        var values: [4]u32 = undefined;
+        var len: usize = 0;
+        if (state.maximized) {
+            values[len] = 1;
+            len += 1;
+        }
+        if (state.fullscreen) {
+            values[len] = 2;
+            len += 1;
+        }
+        if (state.resizing) {
+            values[len] = 3;
+            len += 1;
+        }
+        if (state.activated) {
+            values[len] = 4;
+            len += 1;
+        }
+        xdg.XdgToplevel.sendConfigure(
+            toplevel,
+            @intCast(@min(width, @as(u32, std.math.maxInt(i32)))),
+            @intCast(@min(height, @as(u32, std.math.maxInt(i32)))),
+            std.mem.sliceAsBytes(values[0..len]),
+        );
+        const serial = self.display.nextSerial();
+        xdg.XdgSurface.sendConfigure(xdg_surface, serial);
+        entry.pending_configure_serial = serial;
+    }
+
     /// Route a pointer motion to the currently focused surface.
     /// `x` and `y` are surface-local coordinates in pixels.
     /// Also records the cursor position for drawCursor.
@@ -755,8 +907,8 @@ pub const Compositor = struct {
 
     /// Route a key press or release to the currently focused surface.
     /// `keycode` is the evdev scancode (kernel keycode; clients add 8 for XKB).
-    pub fn key(self: *Compositor, keycode: u32, pressed: bool) void {
-        seat_mod.routeKey(&self.seat_ctx, self, keycode, pressed);
+    pub fn key(self: *Compositor, keycode: u32, pressed: bool) bool {
+        return seat_mod.routeKey(&self.seat_ctx, self, keycode, pressed);
     }
 
     /// Route seat-global relative motion to the focused client's zwp_relative_pointer_v1.
@@ -833,6 +985,22 @@ pub const Compositor = struct {
         const timeout_i32: i32 = if (timeout_ms) |t| @intCast(t) else -1;
         try self.display.getEventLoop().dispatch(timeout_i32);
 
+        // Accepting a connection adds its fd to the event loop, but that new fd
+        // is not part of the epoll result which delivered the listening socket.
+        // Drain a small bounded number of zero-timeout passes so the requests a
+        // client wrote with connect() are handled now. Without this, a client's
+        // initial registry/xdg requests can remain parked until an unrelated
+        // second connection wakes the server.
+        var drain_pass: u8 = 0;
+        while (drain_pass < 4) : (drain_pass += 1) {
+            self.display.flushClients();
+            try self.display.getEventLoop().dispatch(0);
+        }
+
+        // The final drain may itself queue globals, configure events, sync
+        // completion, and other replies, so finish with one last flush.
+        self.display.flushClients();
+
         // 3. Drain pending surface events (mapped before committed, per surface).
         drainSurfaceEvents(self.surface_entries.items, handler, ctx);
 
@@ -882,13 +1050,13 @@ pub const Compositor = struct {
         for (self.surface_entries.items) |*entry| {
             // FIX C3: release only the buffer that was committed on this frame.
             // pending_buffer_res is the attach-staging pointer and must not be touched here.
-            if (entry.committed_buffer_res) |buf_res| {
-                Shm.releaseBuffer(buf_res);
+            if (entry.committed_buffer_res) |buffer_ref| {
+                if (buffer_ref.resolve()) |buf_res| Shm.releaseBuffer(buf_res);
                 entry.committed_buffer_res = null;
             }
             // Release a dma-buf committed buffer via wl_buffer.release (not Shm.releaseBuffer).
-            if (entry.committed_dmabuf_res) |dbuf_res| {
-                wlp.WlBuffer.sendRelease(dbuf_res);
+            if (entry.committed_dmabuf_res) |buffer_ref| {
+                if (buffer_ref.resolve()) |dbuf_res| wlp.WlBuffer.sendRelease(dbuf_res);
                 entry.committed_dmabuf_res = null;
             }
             // Fire the frame callback and destroy the callback object.
@@ -945,6 +1113,22 @@ pub fn drainSurfaceEvents(
         if (entry.needs_unmapped_event) {
             entry.needs_unmapped_event = false;
             handler(ctx, .{ .surface_unmapped = entry.surface.id });
+        }
+        if (entry.needs_move_event) {
+            entry.needs_move_event = false;
+            handler(ctx, .{ .surface_move_requested = entry.surface.id });
+        }
+        if (entry.pending_resize_edge) |edge| {
+            entry.pending_resize_edge = null;
+            handler(ctx, .{ .surface_resize_requested = .{ .id = entry.surface.id, .edge = edge } });
+        }
+        if (entry.pending_maximized) |maximized| {
+            entry.pending_maximized = null;
+            handler(ctx, .{ .surface_maximize_requested = .{ .id = entry.surface.id, .maximized = maximized } });
+        }
+        if (entry.pending_fullscreen) |fullscreen| {
+            entry.pending_fullscreen = null;
+            handler(ctx, .{ .surface_fullscreen_requested = .{ .id = entry.surface.id, .fullscreen = fullscreen } });
         }
     }
 }
@@ -1054,6 +1238,19 @@ test "drainSurfaceEvents: only mapped flag" {
     try testing.expectEqual(@as(usize, 1), evs.len);
     try testing.expect(std.meta.activeTag(evs[0]) == .surface_mapped);
     try testing.expect(!entries[0].needs_mapped_event);
+}
+
+test "drainSurfaceEvents: interactive move request is delivered once" {
+    const testing = std.testing;
+    var entries = [_]HostedEntry{makeTestEntry(4, false, false, false)};
+    entries[0].needs_move_event = true;
+    var col = EventCollector{};
+    drainSurfaceEvents(&entries, EventCollector.handler, &col);
+    const evs = col.events();
+    try testing.expectEqual(@as(usize, 1), evs.len);
+    try testing.expect(std.meta.activeTag(evs[0]) == .surface_move_requested);
+    try testing.expectEqual(@as(u32, 4), evs[0].surface_move_requested.value());
+    try testing.expect(!entries[0].needs_move_event);
 }
 
 test "drainSurfaceEvents: no flags -> no events" {
@@ -1204,6 +1401,9 @@ fn makeTestCompositorShell() Compositor {
         .dmabuf_ctx = undefined,
         .constraints_ctx = undefined,
         .tablet_ctx = undefined,
+        .viewporter_ctx = undefined,
+        .fractional_scale_ctx = undefined,
+        .subcompositor_ctx = undefined,
     };
 }
 

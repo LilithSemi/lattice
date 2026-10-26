@@ -21,8 +21,8 @@
             .hash = "drm-0.1.0-ObSCT5MIAQDFo1jPV8V9pDsBZtveE6ZB1OOxy7ehbr_J",
         },
         .xkbcommon = .{
-            .url = "git+https://git.lilithsemi.com/LilithSemi/xkbcommon.zig#148af8d0f65ceb44376f0f674a46aec7aa966aa8",
-            .hash = "xkbcommon-0.1.0-6Tc_PQptCABqiTjz-CH7Qr2ObkrLwYZxOgGVUN3xzULy",
+            .url = "git+https://git.lilithsemi.com/LilithSemi/xkbcommon.zig#d1cdaf7dee94690111bfc15b52296291e524e82c",
+            .hash = "xkbcommon-0.1.0-6Tc_Pb5yCADVrEYFcKqxLFw0X0nX4NxNTu8Lr2v9dwIB",
         },
         .udev = .{
             .url = "git+https://git.lilithsemi.com/LilithSemi/udev.zig#5b76bbccde9ef7bcb9b6447c0f2454f2ade51733",

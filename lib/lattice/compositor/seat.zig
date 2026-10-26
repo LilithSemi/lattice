@@ -200,6 +200,8 @@ pub const ClientSeat = struct {
     pointer_res: ?*Object = null,
     /// The wl_keyboard resource, if the client called get_keyboard.
     keyboard_res: ?*Object = null,
+    /// True after this exact resource received wl_keyboard.enter.
+    keyboard_focused: bool = false,
     /// The zwp_relative_pointer_v1 resource, if the client called get_relative_pointer.
     relative_ptr_res: ?*Object = null,
 
@@ -247,6 +249,12 @@ pub const SeatCtx = struct {
     /// True when the keymap was built from the real XKB database (not the
     /// MINIMAL fallback). Informational; used for logging / e2e assertions.
     keymap_is_real: bool = false,
+    /// Server-side state for the exact map advertised to clients. A Wayland
+    /// compositor owns modifier state and must publish changes; clients do not
+    /// infer it merely from the stream of wl_keyboard.key events.
+    xkb_ctx: ?*xkb.Context = null,
+    xkb_keymap: ?*xkb.Keymap = null,
+    xkb_state: ?*xkb.State = null,
 };
 
 pub fn makeSeatCtx() SeatCtx {
@@ -295,6 +303,20 @@ fn buildRealKeymap(gpa: std.mem.Allocator, io: std.Io, root: ?[]const u8) ![]u8 
     if (root) |r| try ctx.includePathAppend(r);
     const km = try xkb.Keymap.newFromNames(ctx, .{ .rules = "evdev", .layout = "us" }, .text_v1);
     defer km.destroy();
+
+    // A syntactically valid map can still be unusable if a partial XKB parser
+    // silently drops the symbols section. Check representative alphabetic
+    // keys before advertising it; otherwise clients receive key events but
+    // translate every one to NoSymbol and text fields appear dead.
+    for ([_]usize{ 38, 44 }) |keycode| { // evdev+8: A and J
+        if (keycode >= km.keys.len or
+            km.keys[keycode].groups.len == 0 or
+            km.keys[keycode].groups[0].levels.len == 0 or
+            km.keys[keycode].groups[0].levels[0].syms.len == 0)
+        {
+            return error.IncompleteKeymap;
+        }
+    }
     return try km.getAsString(.text_v1); // gpa-owned, survives ctx/km destroy
 }
 
@@ -318,6 +340,25 @@ fn selectKeymap(ctx: *SeatCtx, result: anyerror![]u8) void {
 pub fn initSeatKeymap(ctx: *SeatCtx, gpa: std.mem.Allocator, io: std.Io, root: ?[]const u8) void {
     const result = buildRealKeymap(gpa, io, root);
     selectKeymap(ctx, result);
+
+    // Reparse the serialized, self-contained map so the server can maintain
+    // the same modifier/group state that hosted clients use.
+    const state_ctx = xkb.Context.create(gpa, io, .{
+        .no_default_includes = true,
+        .no_environment_names = true,
+    }, null) catch return;
+    const keymap = xkb.Keymap.newFromString(state_ctx, ctx.keymap_text, .text_v1) catch {
+        state_ctx.destroy();
+        return;
+    };
+    const state = xkb.State.create(keymap) catch {
+        keymap.destroy();
+        state_ctx.destroy();
+        return;
+    };
+    ctx.xkb_ctx = state_ctx;
+    ctx.xkb_keymap = keymap;
+    ctx.xkb_state = state;
 }
 
 /// Write the seat's cached XKB keymap to a memfd and send it to a wl_keyboard
@@ -348,6 +389,10 @@ fn sendKeymapToResource(ctx: *SeatCtx, kbd_res: *Object) void {
     std.posix.munmap(map);
 
     wlp.WlKeyboard.sendKeymap(kbd_res, KEYMAP_FORMAT_XKB_V1, fd, size);
+    // The queued SCM_RIGHTS entry stores this raw fd until flush. Send it while
+    // it is still open; the defer above may close our copy once the kernel has
+    // duplicated it for the client.
+    kbd_res.client.flush() catch {};
 }
 
 // ---------------------------------------------------------------------------
@@ -398,12 +443,33 @@ fn onGetKeyboard(client_data: ?*anyopaque, resource: *Object, id: u32) void {
     const kbd_res = Object.create(resource.client, &wlp.WlKeyboard.interface, resource.version, id) catch return;
     wlp.WlKeyboard.setImplementation(kbd_res, &ctx.keyboard_impl, ctx, onKeyboardDestroy);
 
-    sendKeymapToResource(ctx, kbd_res);
-
     for (ctx.clients.items) |*cs| {
         if (cs.seat_res == resource) {
             cs.keyboard_res = kbd_res;
-            return;
+            cs.keyboard_focused = false;
+            break;
+        }
+    }
+
+    sendKeymapToResource(ctx, kbd_res);
+    if (resource.version >= 4) wlp.WlKeyboard.sendRepeatInfo(kbd_res, 25, 600);
+
+    // Focus can be established by a pointer event before a lazily-created
+    // wl_keyboard exists. Bring the new resource up to current seat state
+    // immediately instead of waiting for a focus transition that may never
+    // occur.
+    if (ctx.focus_tracker.focused) |focused| {
+        const comp = getCompositor(ctx);
+        if (comp.findSurfaceById(focused)) |entry| {
+            if (entry.wl_surface_res.client == resource.client) {
+                const serial = comp.display.nextSerial();
+                wlp.WlKeyboard.sendEnter(kbd_res, serial, entry.wl_surface_res, "");
+                const mods_serial = comp.display.nextSerial();
+                wlp.WlKeyboard.sendModifiers(kbd_res, mods_serial, 0, 0, 0, 0);
+                for (ctx.clients.items) |*cs| {
+                    if (cs.keyboard_res == kbd_res) cs.keyboard_focused = true;
+                }
+            }
         }
     }
 }
@@ -505,6 +571,7 @@ fn onKeyboardDestroy(resource: *Object) void {
     for (ctx.clients.items) |*cs| {
         if (cs.keyboard_res == resource) {
             cs.keyboard_res = null;
+            cs.keyboard_focused = false;
             return;
         }
     }
@@ -546,19 +613,19 @@ pub fn routeFocus(
 
     // --- LEAVE: deactivate constraint on the old surface ---
     if (transition.leave) |old_id| {
-        if (findClientSeatForSurface(ctx, comp, old_id)) |cs| {
-            if (cs.keyboard_res) |kbd| {
-                const serial = comp.display.nextSerial();
-                if (comp.findSurfaceById(old_id)) |e| {
+        if (comp.findSurfaceById(old_id)) |e| {
+            for (ctx.clients.items) |*cs| {
+                if (cs.seat_res.client != e.wl_surface_res.client) continue;
+                if (cs.keyboard_res) |kbd| {
+                    const serial = comp.display.nextSerial();
                     wlp.WlKeyboard.sendLeave(kbd, serial, e.wl_surface_res);
+                    cs.keyboard_focused = false;
                 }
-            }
-            if (cs.pointer_res) |ptr| {
-                const serial2 = comp.display.nextSerial();
-                if (comp.findSurfaceById(old_id)) |e| {
+                if (cs.pointer_res) |ptr| {
+                    const serial2 = comp.display.nextSerial();
                     wlp.WlPointer.sendLeave(ptr, serial2, e.wl_surface_res);
+                    wlp.WlPointer.sendFrame(ptr);
                 }
-                wlp.WlPointer.sendFrame(ptr);
             }
         }
 
@@ -598,12 +665,21 @@ pub fn routeFocus(
 
     // --- ENTER: activate constraint on the new surface ---
     if (transition.enter) |new_id2| {
-        if (findClientSeatForSurface(ctx, comp, new_id2)) |cs| {
-            if (comp.findSurfaceById(new_id2)) |entry| {
+        if (comp.findSurfaceById(new_id2)) |entry| {
+            // Toolkits may bind wl_seat more than once. Notify every input
+            // resource belonging to the focused client, rather than only the
+            // first binding, so the keyboard receiving keys has also entered.
+            for (ctx.clients.items) |*cs| {
+                if (cs.seat_res.client != entry.wl_surface_res.client) continue;
                 if (cs.keyboard_res) |kbd| {
                     const serial = comp.display.nextSerial();
                     // keys currently held = empty array.
                     wlp.WlKeyboard.sendEnter(kbd, serial, entry.wl_surface_res, "");
+                    // Publish a complete initial XKB state after enter. Clients
+                    // need this even when every modifier is released.
+                    const mods_serial = comp.display.nextSerial();
+                    wlp.WlKeyboard.sendModifiers(kbd, mods_serial, 0, 0, 0, 0);
+                    cs.keyboard_focused = true;
                 }
                 if (cs.pointer_res) |ptr| {
                     const serial2 = comp.display.nextSerial();
@@ -659,12 +735,12 @@ pub fn routePointerMotion(
     y: f64,
 ) void {
     const focused = ctx.focus_tracker.focused orelse return;
-    const cs = findClientSeatForSurface(ctx, comp, focused) orelse return;
-    const ptr = cs.pointer_res orelse return;
+    const focused_entry = comp.findSurfaceById(focused) orelse return;
+    const surface_client = focused_entry.wl_surface_res.client;
+    var routed_x = x;
+    var routed_y = y;
 
     // Task 6: enforce lock/confine constraints before sending absolute motion.
-    const focused_entry = comp.findSurfaceById(focused);
-
     if (constraints.activeFor(comp.constraints_ctx.list.items, focused.value())) |c| {
         if (constraints.suppressesAbsolute(c.*)) {
             // Active lock: suppress absolute motion entirely (pointer is frozen).
@@ -672,19 +748,22 @@ pub fn routePointerMotion(
         }
         // Active confine: clamp the coordinates to the region.
         if (c.active and c.kind == .confine) {
-            const surf_w = if (focused_entry) |e| e.surface.width else 0;
-            const surf_h = if (focused_entry) |e| e.surface.height else 0;
+            const surf_w = focused_entry.surface.width;
+            const surf_h = focused_entry.surface.height;
             const clamped = constraints.clampToRegion(x, y, c.region, surf_w, surf_h);
-            const time = tick(ctx);
-            wlp.WlPointer.sendMotion(ptr, time, wl.Fixed.fromDouble(clamped.x), wl.Fixed.fromDouble(clamped.y));
-            wlp.WlPointer.sendFrame(ptr);
-            return;
+            routed_x = clamped.x;
+            routed_y = clamped.y;
         }
     }
 
     const time = tick(ctx);
-    wlp.WlPointer.sendMotion(ptr, time, wl.Fixed.fromDouble(x), wl.Fixed.fromDouble(y));
-    wlp.WlPointer.sendFrame(ptr);
+    for (ctx.clients.items) |*cs| {
+        if (cs.seat_res.client != surface_client) continue;
+        if (cs.pointer_res) |ptr| {
+            wlp.WlPointer.sendMotion(ptr, time, wl.Fixed.fromDouble(routed_x), wl.Fixed.fromDouble(routed_y));
+            wlp.WlPointer.sendFrame(ptr);
+        }
+    }
 }
 
 pub fn routePointerButton(
@@ -694,13 +773,17 @@ pub fn routePointerButton(
     pressed: bool,
 ) void {
     const focused = ctx.focus_tracker.focused orelse return;
-    const cs = findClientSeatForSurface(ctx, comp, focused) orelse return;
-    const ptr = cs.pointer_res orelse return;
+    const entry = comp.findSurfaceById(focused) orelse return;
     const serial = comp.display.nextSerial();
     const time = tick(ctx);
     const state: u32 = if (pressed) BTN_STATE_PRESSED else BTN_STATE_RELEASED;
-    wlp.WlPointer.sendButton(ptr, serial, time, button, state);
-    wlp.WlPointer.sendFrame(ptr);
+    for (ctx.clients.items) |*cs| {
+        if (cs.seat_res.client != entry.wl_surface_res.client) continue;
+        if (cs.pointer_res) |ptr| {
+            wlp.WlPointer.sendButton(ptr, serial, time, button, state);
+            wlp.WlPointer.sendFrame(ptr);
+        }
+    }
 }
 
 pub fn routePointerAxis(
@@ -710,17 +793,17 @@ pub fn routePointerAxis(
     vertical: f64,
 ) void {
     const focused = ctx.focus_tracker.focused orelse return;
-    const cs = findClientSeatForSurface(ctx, comp, focused) orelse return;
-    const ptr = cs.pointer_res orelse return;
+    const entry = comp.findSurfaceById(focused) orelse return;
     const time = tick(ctx);
-    // axis: 0 = vertical_scroll, 1 = horizontal_scroll.
-    if (vertical != 0.0) {
-        wlp.WlPointer.sendAxis(ptr, time, 0, wl.Fixed.fromDouble(vertical));
+    for (ctx.clients.items) |*cs| {
+        if (cs.seat_res.client != entry.wl_surface_res.client) continue;
+        if (cs.pointer_res) |ptr| {
+            // axis: 0 = vertical_scroll, 1 = horizontal_scroll.
+            if (vertical != 0.0) wlp.WlPointer.sendAxis(ptr, time, 0, wl.Fixed.fromDouble(vertical));
+            if (horizontal != 0.0) wlp.WlPointer.sendAxis(ptr, time, 1, wl.Fixed.fromDouble(horizontal));
+            wlp.WlPointer.sendFrame(ptr);
+        }
     }
-    if (horizontal != 0.0) {
-        wlp.WlPointer.sendAxis(ptr, time, 1, wl.Fixed.fromDouble(horizontal));
-    }
-    wlp.WlPointer.sendFrame(ptr);
 }
 
 /// Route seat-global relative motion to the focused client's zwp_relative_pointer_v1.
@@ -735,18 +818,22 @@ pub fn routePointerRelative(
     dy_unaccel: f64,
 ) void {
     const focused = ctx.focus_tracker.focused orelse return;
-    const cs = findClientSeatForSurface(ctx, comp, focused) orelse return;
-    const rp_res = cs.relative_ptr_res orelse return;
+    const entry = comp.findSurfaceById(focused) orelse return;
     const lo = tick(ctx);
-    rp.ZwpRelativePointerV1.sendRelativeMotion(
-        rp_res,
-        0, // utime_hi (hi word of 64-bit us timestamp, use 0)
-        lo, // utime_lo (monotonic tick as lo word)
-        wl.Fixed.fromDouble(dx),
-        wl.Fixed.fromDouble(dy),
-        wl.Fixed.fromDouble(dx_unaccel),
-        wl.Fixed.fromDouble(dy_unaccel),
-    );
+    for (ctx.clients.items) |*cs| {
+        if (cs.seat_res.client != entry.wl_surface_res.client) continue;
+        if (cs.relative_ptr_res) |rp_res| {
+            rp.ZwpRelativePointerV1.sendRelativeMotion(
+                rp_res,
+                0, // utime_hi (hi word of 64-bit us timestamp, use 0)
+                lo, // utime_lo (monotonic tick as lo word)
+                wl.Fixed.fromDouble(dx),
+                wl.Fixed.fromDouble(dy),
+                wl.Fixed.fromDouble(dx_unaccel),
+                wl.Fixed.fromDouble(dy_unaccel),
+            );
+        }
+    }
 }
 
 pub fn routeKey(
@@ -754,14 +841,61 @@ pub fn routeKey(
     comp: *@import("../compositor.zig").Compositor,
     keycode: u32,
     pressed: bool,
-) void {
-    const focused = ctx.focus_tracker.focused orelse return;
-    const cs = findClientSeatForSurface(ctx, comp, focused) orelse return;
-    const kbd = cs.keyboard_res orelse return;
-    const serial = comp.display.nextSerial();
+) bool {
+    const focused = ctx.focus_tracker.focused orelse return false;
+    const entry = comp.findSurfaceById(focused) orelse return false;
     const time = tick(ctx);
-    const state: u32 = if (pressed) KEY_STATE_PRESSED else KEY_STATE_RELEASED;
-    wlp.WlKeyboard.sendKey(kbd, serial, time, keycode, state);
+    const wire_state: u32 = if (pressed) KEY_STATE_PRESSED else KEY_STATE_RELEASED;
+    var modifiers_changed = false;
+    var mods_depressed: u32 = 0;
+    var mods_latched: u32 = 0;
+    var mods_locked: u32 = 0;
+    var group: u32 = 0;
+
+    // Keep and publish the compositor-owned XKB state. wl_keyboard keycodes
+    // are evdev codes; XKB keycodes have the conventional +8 offset.
+    if (ctx.xkb_state) |xkb_state| {
+        if (std.math.add(u32, keycode, 8)) |xkb_keycode| {
+            const changed = xkb_state.updateKey(xkb_keycode, if (pressed) .down else .up) catch null;
+            if (changed) |c| {
+                if (c.mods_depressed or c.mods_latched or c.mods_locked or
+                    c.group_depressed or c.group_latched or c.group_locked)
+                {
+                    modifiers_changed = true;
+                    const group_i = xkb_state.serializeLayout(.effective);
+                    mods_depressed = xkb_state.serializeMods(.depressed);
+                    mods_latched = xkb_state.serializeMods(.latched);
+                    mods_locked = xkb_state.serializeMods(.locked);
+                    group = if (group_i < 0) 0 else @intCast(group_i);
+                }
+            }
+        } else |_| {}
+    }
+
+    // Every keyboard object for the focused client represents the same seat.
+    // Fan the event out instead of selecting an arbitrary binding which may
+    // belong to a helper library rather than the application's UI toolkit.
+    var delivered = false;
+    for (ctx.clients.items) |*cs| {
+        if (cs.seat_res.client != entry.wl_surface_res.client or !cs.keyboard_focused) continue;
+        if (cs.keyboard_res) |keyboard| {
+            wlp.WlKeyboard.sendKey(keyboard, comp.display.nextSerial(), time, keycode, wire_state);
+            if (modifiers_changed) {
+                wlp.WlKeyboard.sendModifiers(
+                    keyboard,
+                    comp.display.nextSerial(),
+                    mods_depressed,
+                    mods_latched,
+                    mods_locked,
+                    group,
+                );
+            }
+            // Input can arrive after the shell's compositor pump for this turn.
+            keyboard.client.flush() catch continue;
+            delivered = true;
+        }
+    }
+    return delivered;
 }
 
 pub fn routeModifiers(
@@ -773,10 +907,14 @@ pub fn routeModifiers(
     group: u32,
 ) void {
     const focused = ctx.focus_tracker.focused orelse return;
-    const cs = findClientSeatForSurface(ctx, comp, focused) orelse return;
-    const kbd = cs.keyboard_res orelse return;
-    const serial = comp.display.nextSerial();
-    wlp.WlKeyboard.sendModifiers(kbd, serial, mods_depressed, mods_latched, mods_locked, group);
+    const entry = comp.findSurfaceById(focused) orelse return;
+    for (ctx.clients.items) |*cs| {
+        if (cs.seat_res.client != entry.wl_surface_res.client or !cs.keyboard_focused) continue;
+        if (cs.keyboard_res) |kbd| {
+            const serial = comp.display.nextSerial();
+            wlp.WlKeyboard.sendModifiers(kbd, serial, mods_depressed, mods_latched, mods_locked, group);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -784,6 +922,9 @@ pub fn routeModifiers(
 // ---------------------------------------------------------------------------
 
 pub fn deinitSeatCtx(ctx: *SeatCtx, gpa: std.mem.Allocator) void {
+    if (ctx.xkb_state) |state| state.destroy();
+    if (ctx.xkb_keymap) |keymap| keymap.destroy();
+    if (ctx.xkb_ctx) |xkb_ctx| xkb_ctx.destroy();
     // Free the real keymap buffer if we own one (the MINIMAL fallback is static).
     if (ctx.keymap_owned) gpa.free(ctx.keymap_text);
     ctx.clients.deinit(gpa);
@@ -891,6 +1032,25 @@ test "buildRealKeymap: nonexistent XKB root returns error (fallback path)" {
     } else |_| {
         // expected: fell through to the error branch.
     }
+}
+
+test "minimal fallback keymap translates Wayland evdev keycodes" {
+    const testing = std.testing;
+    const xkb_ctx = try xkb.Context.create(
+        testing.allocator,
+        testing.io,
+        .{ .no_default_includes = true },
+        null,
+    );
+    defer xkb_ctx.destroy();
+    const keymap = try xkb.Keymap.newFromString(xkb_ctx, MINIMAL_KEYMAP, .text_v1);
+    defer keymap.destroy();
+    const state = try xkb.State.create(keymap);
+    defer state.destroy();
+
+    // wl_keyboard.key uses evdev codes, while XKB keycodes are evdev + 8.
+    try testing.expectEqual(@as(u21, 'a'), state.keyGetUtf32(30 + 8));
+    try testing.expectEqual(@as(u21, 's'), state.keyGetUtf32(31 + 8));
 }
 
 test "wl.Fixed: f64 to Fixed encoding round-trip" {

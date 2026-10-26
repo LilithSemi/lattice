@@ -95,14 +95,16 @@ pub fn pickFreeBuffer(buffers: [2]?ShmBuffer) ?usize {
 ///
 /// Rules:
 ///   - Surface must be configured by the compositor.
-///   - No frame callback must be in-flight (paces to compositor clock).
 ///   - At least one ShmBuffer must be free, OR no buffers have been
 ///     allocated yet (first frame: allocation happens in surfaceRenderTarget).
 ///
+/// Buffer availability is the hard backpressure. A frame callback is only a
+/// scheduling hint: making it a hard gate can deadlock an embedded compositor
+/// when the parent delays that callback until it observes another commit.
+///
 /// Factored out of the vtable renderAvailable for unit-testability.
-pub fn canRender(configured: bool, any_free_buffer: bool, frame_in_flight: bool) bool {
+pub fn canRender(configured: bool, any_free_buffer: bool) bool {
     if (!configured) return false;
-    if (frame_in_flight) return false;
     return any_free_buffer;
 }
 
@@ -203,23 +205,15 @@ test "pickFreeBuffer: unallocated slots skipped" {
 }
 
 test "canRender: not configured returns false" {
-    try std.testing.expect(!canRender(false, true, false));
+    try std.testing.expect(!canRender(false, true));
 }
 
-test "canRender: frame in flight returns false" {
-    try std.testing.expect(!canRender(true, true, true));
+test "canRender: configured + free buffer returns true" {
+    try std.testing.expect(canRender(true, true));
 }
 
-test "canRender: configured + free buffer + no frame in flight returns true" {
-    try std.testing.expect(canRender(true, true, false));
-}
-
-test "canRender: configured + no free buffer + no frame in flight returns false" {
-    try std.testing.expect(!canRender(true, false, false));
-}
-
-test "canRender: not configured and frame in flight returns false" {
-    try std.testing.expect(!canRender(false, true, true));
+test "canRender: configured + no free buffer returns false" {
+    try std.testing.expect(!canRender(true, false));
 }
 
 test "chooseDmabufMode: all true returns dmabuf" {

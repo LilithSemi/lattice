@@ -54,14 +54,14 @@ pub fn makeXdgCtx() XdgCtx {
             .set_title = onSetTitle,
             .set_app_id = onSetAppId,
             .show_window_menu = null,
-            .move = null,
-            .resize = null,
+            .move = onMove,
+            .resize = onResize,
             .set_max_size = null,
             .set_min_size = null,
-            .set_maximized = null,
-            .unset_maximized = null,
-            .set_fullscreen = null,
-            .unset_fullscreen = null,
+            .set_maximized = onSetMaximized,
+            .unset_maximized = onUnsetMaximized,
+            .set_fullscreen = onSetFullscreen,
+            .unset_fullscreen = onUnsetFullscreen,
             .set_minimized = null,
         },
         .positioner_impl = .{},
@@ -182,6 +182,13 @@ fn onGetToplevel(client_data: ?*anyopaque, resource: *Object, id_: u32) void {
             entry.state.role = .toplevel;
             entry.surface.role = .toplevel;
 
+            // Advertise only the state transitions the hosting shell actually
+            // implements. Values are xdg_toplevel.wm_capabilities enum tags.
+            if (toplevel_res.version >= 5) {
+                const capabilities = [_]u32{ 2, 3 }; // maximize, fullscreen
+                xdg.XdgToplevel.sendWmCapabilities(toplevel_res, std.mem.asBytes(&capabilities));
+            }
+
             // Send initial configure pair: toplevel.configure(0,0,[]) then xdg_surface.configure(serial).
             xdg.XdgToplevel.sendConfigure(toplevel_res, 0, 0, &.{});
             const serial = comp.display.nextSerial();
@@ -276,6 +283,79 @@ fn onSetAppId(client_data: ?*anyopaque, resource: *Object, app_id_: []const u8) 
             break;
         }
     }
+}
+
+fn onMove(client_data: ?*anyopaque, resource: *Object, seat: *Object, serial: u32) void {
+    _ = seat;
+    _ = serial;
+    const ctx: *XdgCtx = @ptrCast(@alignCast(client_data.?));
+    const comp = getCompositor(ctx);
+    for (comp.surface_entries.items) |*entry| {
+        if (entry.xdg_toplevel_res == resource) {
+            entry.needs_move_event = true;
+            break;
+        }
+    }
+}
+
+fn onResize(client_data: ?*anyopaque, resource: *Object, seat: *Object, serial: u32, edges: u32) void {
+    _ = seat;
+    _ = serial;
+    const Edge = @import("hosted.zig").ResizeEdge;
+    const edge: Edge = switch (edges) {
+        1 => .top,
+        2 => .bottom,
+        4 => .left,
+        5 => .top_left,
+        6 => .bottom_left,
+        8 => .right,
+        9 => .top_right,
+        10 => .bottom_right,
+        else => return,
+    };
+    const ctx: *XdgCtx = @ptrCast(@alignCast(client_data.?));
+    const comp = getCompositor(ctx);
+    for (comp.surface_entries.items) |*entry| {
+        if (entry.xdg_toplevel_res == resource) {
+            entry.pending_resize_edge = edge;
+            break;
+        }
+    }
+}
+
+fn requestMaximized(client_data: ?*anyopaque, resource: *Object, enabled: bool) void {
+    const ctx: *XdgCtx = @ptrCast(@alignCast(client_data.?));
+    const comp = getCompositor(ctx);
+    for (comp.surface_entries.items) |*entry| if (entry.xdg_toplevel_res == resource) {
+        entry.pending_maximized = enabled;
+        break;
+    };
+}
+
+fn onSetMaximized(client_data: ?*anyopaque, resource: *Object) void {
+    requestMaximized(client_data, resource, true);
+}
+
+fn onUnsetMaximized(client_data: ?*anyopaque, resource: *Object) void {
+    requestMaximized(client_data, resource, false);
+}
+
+fn requestFullscreen(client_data: ?*anyopaque, resource: *Object, enabled: bool) void {
+    const ctx: *XdgCtx = @ptrCast(@alignCast(client_data.?));
+    const comp = getCompositor(ctx);
+    for (comp.surface_entries.items) |*entry| if (entry.xdg_toplevel_res == resource) {
+        entry.pending_fullscreen = enabled;
+        break;
+    };
+}
+
+fn onSetFullscreen(client_data: ?*anyopaque, resource: *Object, output: ?*Object) void {
+    _ = output;
+    requestFullscreen(client_data, resource, true);
+}
+
+fn onUnsetFullscreen(client_data: ?*anyopaque, resource: *Object) void {
+    requestFullscreen(client_data, resource, false);
 }
 
 // ---------------------------------------------------------------------------

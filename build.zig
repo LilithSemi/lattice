@@ -86,6 +86,8 @@ pub fn build(b: *std.Build) void {
     const pointer_constraints_proto = wayland_build.generateProtocol(b, wayland_dep, wl_protocols.path("unstable/pointer-constraints/pointer-constraints-unstable-v1.xml"), "pointer_constraints");
     const tablet_v2_proto = wayland_build.generateProtocol(b, wayland_dep, wl_protocols.path("unstable/tablet/tablet-unstable-v2.xml"), "tablet_v2");
     const xdg_decoration_proto = wayland_build.generateProtocol(b, wayland_dep, wl_protocols.path("unstable/xdg-decoration/xdg-decoration-unstable-v1.xml"), "xdg_decoration");
+    const viewporter_proto = wayland_build.generateProtocol(b, wayland_dep, wl_protocols.path("stable/viewporter/viewporter.xml"), "viewporter");
+    const fractional_scale_proto = wayland_build.generateProtocol(b, wayland_dep, wl_protocols.path("staging/fractional-scale/fractional-scale-v1.xml"), "fractional_scale");
 
     root_module.addImport("wayland", wayland_mod);
     root_module.addImport("wayland_protocol", wl_proto);
@@ -96,6 +98,8 @@ pub fn build(b: *std.Build) void {
     root_module.addImport("pointer_constraints", pointer_constraints_proto);
     root_module.addImport("tablet_v2", tablet_v2_proto);
     root_module.addImport("xdg_decoration", xdg_decoration_proto);
+    root_module.addImport("viewporter", viewporter_proto);
+    root_module.addImport("fractional_scale", fractional_scale_proto);
     root_module.addImport("prism", prism_dep.module("prism"));
     root_module.addImport("xkbcommon", xkbcommon_dep.module("xkbcommon"));
     root_module.addImport("drm", drm_dep.module("drm"));

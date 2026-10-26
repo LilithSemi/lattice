@@ -228,8 +228,8 @@ const App = struct {
                 self.comp.pointerMotion(50, 50);
                 self.comp.pointerButton(0x110, true);
                 self.comp.pointerButton(0x110, false);
-                self.comp.key(30, true);
-                self.comp.key(30, false);
+                _ = self.comp.key(30, true);
+                _ = self.comp.key(30, false);
                 self.input_sent = true;
                 std.debug.print("[nested] synthetic input sent to surface id={d}\n", .{surf.id.value()});
                 break;

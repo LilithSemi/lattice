@@ -11,6 +11,7 @@ const std = @import("std");
 const wl = @import("wayland");
 const wlp = @import("wayland_protocol");
 const hosted_mod = @import("hosted.zig");
+const dmabuf_mod = @import("dmabuf.zig");
 
 const Object = wl.Object;
 const Client = wl.server_client.Client;
@@ -207,7 +208,7 @@ fn onSurfaceCommit(client_data: ?*anyopaque, resource: *Object) void {
         if (comp.findDmabufBuffer(buf_res.client, buf_res.id)) |dbuf| {
             // dma-buf import path: mmap on first use (cached across frames).
             if (dbuf.mapping == null) {
-                const map_size = @as(usize, dbuf.stride) * @as(usize, dbuf.height);
+                const map_size = @as(usize, dbuf.offset) + @as(usize, dbuf.stride) * @as(usize, dbuf.height);
                 dbuf.mapping = std.posix.mmap(
                     null,
                     map_size,
@@ -220,7 +221,8 @@ fn onSurfaceCommit(client_data: ?*anyopaque, resource: *Object) void {
                 };
                 if (dbuf.mapping != null) {}
             }
-            if (dbuf.mapping) |pixels| {
+            if (dbuf.mapping) |allocation| {
+                const pixels = allocation[@as(usize, dbuf.offset)..];
                 const w = dbuf.width;
                 const h = dbuf.height;
                 const stride = dbuf.stride;
@@ -232,11 +234,13 @@ fn onSurfaceCommit(client_data: ?*anyopaque, resource: *Object) void {
                 entry.last_stride = stride;
                 entry.last_format = fmt;
 
+                dmabuf_mod.beginCpuRead(dbuf.fd);
                 hosted_mod.uploadToTexture(comp.device, entry, pixels, w, h, stride, fmt) catch {};
+                dmabuf_mod.endCpuRead(dbuf.fd);
 
                 // HDR slice 2 Part 2b proof: when the committed dma-buf carries an
                 // Record the committed dmabuf resource for release in endFrame.
-                entry.committed_dmabuf_res = buf_res;
+                entry.committed_dmabuf_res = .init(buf_res);
 
                 entry.needs_committed_event = true;
                 if (w != entry.surface.width or h != entry.surface.height) {
@@ -264,7 +268,7 @@ fn onSurfaceCommit(client_data: ?*anyopaque, resource: *Object) void {
 
             // HDR slice 2 (Task 4) proof: when the committed shm buffer carries an
             // FIX C3: record the buffer that was committed so endFrame releases exactly it.
-            entry.committed_buffer_res = buf_res;
+            entry.committed_buffer_res = .init(buf_res);
 
             // Flag for Task 10 to drain into a surface_committed event.
             entry.needs_committed_event = true;
@@ -293,6 +297,17 @@ fn onSurfaceCommit(client_data: ?*anyopaque, resource: *Object) void {
             comp.device.destroyResource(t);
             entry.surface.texture = null;
         }
+    }
+
+    // Viewport state is double-buffered with wl_surface state and must apply
+    // even when this commit did not attach a new buffer.
+    entry.commitViewport();
+
+    // A subsurface maps when it has content; its parent controls whether the
+    // composed tree is visible, while the child keeps its own texture alive.
+    if (entry.surface.parent != null and entry.state.current_buffer != null and !entry.surface.mapped) {
+        entry.surface.mapped = true;
+        entry.needs_mapped_event = true;
     }
 
     // Task 6: mark surface as mapped once role=toplevel, configure acked, and has buffer.
