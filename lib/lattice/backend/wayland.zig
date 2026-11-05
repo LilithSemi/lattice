@@ -358,7 +358,7 @@ pub const Wayland = struct {
         // 6. Create prism device and context.
         const selected: prism.drivers.Selected = blk: {
             if (opts.driver) |dname| {
-                const drv = prism.drivers.select(dname) orelse return error.UnknownDriver;
+                const drv = prism.drivers.select(dname, io) orelse return error.UnknownDriver;
                 const dev = try drv.createDevice(gpa, io);
                 break :blk .{ .driver = drv, .device = dev };
             } else {
