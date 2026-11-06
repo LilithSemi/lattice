@@ -60,6 +60,7 @@ pub const Capabilities = backend.Capabilities;
 
 pub const backends = struct {
     pub const Headless = if (enabled.client_headless) @import("lattice/backend/headless.zig").Headless else void;
+    pub const X11 = if (enabled.client_x11) @import("lattice/backend/x11.zig").X11 else void;
     pub const Android = @import("lattice/backend/android.zig").Android;
     pub const backends_wayland = if (enabled.client_wayland) @import("lattice/backend/wayland.zig") else void;
 };

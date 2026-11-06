@@ -1,7 +1,7 @@
 const std = @import("std");
 const enabled = @import("backends_enabled.zig");
 
-pub const BackendKind = enum { auto, wayland, kms, headless };
+pub const BackendKind = enum { auto, wayland, x11, kms, headless };
 
 /// Neutral pointer acceleration profile. Maps to libinput filter.Profile
 /// inside the KMS backend; safe to use on all platforms.
@@ -53,6 +53,7 @@ fn eq(a: ?[]const u8, b: []const u8) bool {
 pub fn resolveBackend(opts: Options, probe: EnvProbe) !BackendKind {
     return switch (opts.backend) {
         .wayland => if (enabled.client_wayland) .wayland else error.InvalidBackend,
+        .x11 => if (enabled.client_x11) .x11 else error.InvalidBackend,
         .kms => if (enabled.client_kms) .kms else error.InvalidBackend,
         .headless => if (enabled.client_headless) .headless else error.InvalidBackend,
         .auto => detectAuto(probe),
@@ -65,7 +66,7 @@ pub fn resolveBackend(opts: Options, probe: EnvProbe) !BackendKind {
 /// server owns the GPU, so we never grab KMS just because a card node exists.
 fn detectAuto(probe: EnvProbe) !BackendKind {
     if (enabled.client_wayland and (probe.wayland_display != null or eq(probe.xdg_session_type, "wayland"))) return .wayland;
-    if (enabled.client_headless and (probe.x11_display != null or eq(probe.xdg_session_type, "x11"))) return .headless;
+    if (enabled.client_x11 and (probe.x11_display != null or eq(probe.xdg_session_type, "x11"))) return .x11;
     if (enabled.client_kms and eq(probe.xdg_session_type, "tty")) return .kms;
     if (enabled.client_kms and probe.xdg_session_type == null and probe.wayland_display == null and probe.x11_display == null and probe.kms_device != null) return .kms;
     if (enabled.client_headless) return .headless;
@@ -105,9 +106,10 @@ test "resolveBackend: unset session type, no gfx indicators, drm present -> kms 
     if (!enabled.client_kms or !enabled.client_wayland or !enabled.client_headless) return error.SkipZigTest;
     try std.testing.expectEqual(BackendKind.kms, try resolveBackend(.{}, .{ .kms_device = "/dev/dri/card0" }));
 }
-test "resolveBackend: x11 session -> headless (x11 backend unbuilt)" {
-    if (!enabled.client_kms or !enabled.client_wayland or !enabled.client_headless) return error.SkipZigTest;
-    try std.testing.expectEqual(BackendKind.headless, try resolveBackend(.{}, .{ .x11_display = ":0", .xdg_session_type = "x11" }));
+test "resolveBackend: x11 session -> x11" {
+    if (!enabled.client_x11) return error.SkipZigTest;
+    try std.testing.expectEqual(BackendKind.x11, try resolveBackend(.{}, .{ .x11_display = ":0", .xdg_session_type = "x11" }));
+    try std.testing.expectEqual(BackendKind.x11, try resolveBackend(.{ .backend = .x11 }, .{}));
 }
 test "resolveBackend: nothing -> headless" {
     if (!enabled.client_kms or !enabled.client_wayland or !enabled.client_headless) return error.SkipZigTest;
@@ -125,6 +127,9 @@ test "resolveBackend rejects a backend that is not compiled in" {
     }
     if (!enabled.client_wayland) {
         try std.testing.expectError(error.InvalidBackend, resolveBackend(.{ .backend = .wayland }, .{}));
+    }
+    if (!enabled.client_x11) {
+        try std.testing.expectError(error.InvalidBackend, resolveBackend(.{ .backend = .x11 }, .{}));
     }
     if (!enabled.client_headless) {
         try std.testing.expectError(error.InvalidBackend, resolveBackend(.{ .backend = .headless }, .{}));
@@ -144,6 +149,7 @@ test "auto never picks a backend that is not compiled in" {
         const got = resolveBackend(.{}, probe) catch continue;
         switch (got) {
             .wayland => try std.testing.expect(enabled.client_wayland),
+            .x11 => try std.testing.expect(enabled.client_x11),
             .kms => try std.testing.expect(enabled.client_kms),
             .headless => try std.testing.expect(enabled.client_headless),
             .auto => try std.testing.expect(false),

@@ -53,6 +53,13 @@ pub const Context = struct {
                 const w = try wayland_backend.Wayland.init(gpa, io, socket_path, opts);
                 return initWithBackend(w.backend());
             },
+            .x11 => {
+                if (comptime !enabled.client_x11) return error.InvalidBackend;
+                const x11_backend = @import("backend/x11.zig");
+                const display_name = try prism.platform.x11.resolveDisplay(env);
+                const x = try x11_backend.X11.init(gpa, io, display_name, env, opts);
+                return initWithBackend(x.backend());
+            },
             .kms => {
                 if (comptime !enabled.client_kms) return error.InvalidBackend;
                 const kms_backend = @import("backend/kms.zig");
